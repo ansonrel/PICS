@@ -1,0 +1,191 @@
+---
+title: "Results of pipeComp run on Hao and Kotliarov datasets (20,000 cells)"
+author: "Jonathan Haab"
+date: "`r Sys.Date()`"
+output: 
+  html_document: 
+    toc: yes
+    toc_float: yes
+    theme: yeti
+    highlight: tango
+    code_folding: show
+    keep_md: no
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(bitmapType="cairo") 
+```
+
+## Load necessary libraries
+
+```{r}
+suppressPackageStartupMessages({
+library(pipeComp)
+library(ggplot2)
+  library(SingleCellExperiment)
+library(tidyr)
+library(tidyverse)
+library(gridExtra)
+  library(patchwork)
+library(cowplot)
+})
+source("../src/pics.R")
+source("../src/norm.R")
+```
+
+## Data
+
+```{r}
+dat <- list.files("../data", full.names = TRUE)
+dat <- lapply(dat, function(x) readRDS(paste0(x, "/d.rds")))
+names(dat) <- list.files("../data/")
+# only take the ADT as main sce
+dat <- lapply(dat, function(x) altExp(x))
+dat
+```
+
+
+```{r}
+lapply(dat, function(x) rownames(x))
+```
+
+```{r}
+# keeping only hao & kotliarov, whcih have isotypes
+dat <- list(dat[["hao_2020"]], dat[["kotliarov_2020"]])
+names(dat) <- c("hao_2020", "kotliarov_2020")
+
+```
+
+```{r}
+dat[[2]]$phenoid[dat[[2]]$phenoid == "C0"] <- "CD4+ naive T"
+dat[[2]]$phenoid[dat[[2]]$phenoid == "C1"] <- "CD4+ memory"
+dat[[2]]$phenoid[dat[[2]]$phenoid == "C2"] <- "monocytes and mDC"
+dat[[2]]$phenoid[dat[[2]]$phenoid == "C3"] <- "B cells"
+dat[[2]]$phenoid[dat[[2]]$phenoid == "C4"] <- "CD8+"
+dat[[2]]$phenoid[dat[[2]]$phenoid == "C5"] <- "NK"
+dat[[2]]$phenoid[dat[[2]]$phenoid == "C6"] <- "CD8+ naive T"
+dat[[2]]$phenoid[dat[[2]]$phenoid == "C7"] <- "unconventional T"
+dat[[2]]$phenoid[dat[[2]]$phenoid == "C8"] <- "non-classical monocytes"
+dat[[2]]$phenoid[dat[[2]]$phenoid == "C9"] <- "pDC"
+```
+
+
+## Normalization
+
+```{r}
+dat <- lapply(dat, function(x){
+  x <- logNormCounts(x)
+  x <- clr.seurat_adts(x)
+  x <- clr.seurat_cells(x)
+})
+dat
+```
+
+## PICS
+
+Positive and negative in each sce: 
+
+```{r}
+print("isotypes:")
+(neg <- lapply(dat, function(x){
+  rownames(rowData(x)[rowData(x)$is.isotype == TRUE, ])
+}))
+
+
+
+(pos <- lapply(dat, function(x){
+  rownames(rowData(x)[rowData(x)$is.posControl == TRUE, ])
+}))
+
+
+```
+
+
+```{r}
+# for each dataset
+# iterate over isotype and positive markers
+# calculate the pics score and
+# display it on a score for the different normalization among the markers
+out <- list()
+for (i in names(dat)){
+  for (j in neg[[i]]){
+    for (k in pos[[i]]){
+      
+      datsub <- dat[[i]][c(j, k)]
+      norm_nam <- get_assay(datsub)
+      pics <- lapply(norm_nam, function(x) round(picsScore(datsub, x)))
+      names(pics) <- norm_nam
+      
+      # sort by score
+      norm_nam <- norm_nam[order(unlist(pics))]
+      
+      pos_pl <- lapply(norm_nam, function(x){
+        if(x == norm_nam[1]) xnam <- k else xnam <- ""
+        df <- data.frame(value = assay(datsub, x)[k,])
+        ggplot(df, aes(x=value)) + 
+          geom_histogram(fill = "#38761D") + ggtitle(paste0(x, " : ", pics[[x]])) +
+          ylab(xnam) + xlab("")
+      })
+      neg_pl <- lapply(norm_nam, function(x){
+        if(x == norm_nam[1]) xnam <- j else xnam <- ""
+        df <- data.frame(value = assay(datsub, x)[j,])
+        ggplot(df, aes(x=value)) + 
+          geom_histogram(fill = "#990000", alpha = 0.9)  + ylab(xnam) + xlab("")
+      })
+      
+      out[[paste(i, j, k, sep = ",")]] <- wrap_plots(pos_pl)  / 
+        wrap_plots(neg_pl)
+
+    }
+  }
+}
+```
+
+
+```{r, fig.width=10, fig.height=6}
+out[[1]]
+```
+
+Good cases: 1 , 4
+
+Bad cases: 5
+
+```{r, fig.width=10, fig.height=6}
+
+out[[5]]
+```
+
+TODO: plot CD45 expression for each celltype
+
+TODO: higher quality screen shot
+
+TODO latter : compute maximum t stat that can happen in the distribution ? Because PICSneg is 0-10 but PICSpos can have higher number...
+
+```{r, fig.width=10, fig.height=6}
+
+(scater::plotExpression(dat[[1]],features = "CD45-1", x = "phenoid", exprs_values = "clr_cells",colour_by = "phenoid" ) + ylim(0,8)) / 
+  (scater::plotExpression(dat[[1]],features = "Rat-IgG1-1", x = "phenoid", exprs_values = "clr_cells", colour_by = "phenoid") + ylim(0,8))
+
+```
+
+
+Mixed example: double population ? 
+
+```{r, fig.width=10, fig.height=6}
+out[[27]]
+```
+
+
+```{r, fig.width=10, fig.height=6}
+(scater::plotExpression(dat[[2]],features = "CD45RA", x = "phenoid", exprs_values = "clr_cells",colour_by = "phenoid" ) + ylim(0,8)) / 
+  (scater::plotExpression(dat[[2]], features = "RatIgG2bkIsotype", x = "phenoid", exprs_values = "clr_cells", colour_by = "phenoid") + ylim(0,8))
+
+```
+
+
+
+
+
+
+
+
