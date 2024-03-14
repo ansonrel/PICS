@@ -20,19 +20,19 @@ clr_function <- function(x) {
 #' @export 
 clr.seurat <- function(x, margin = NA, counts = "counts"){
   
-  # x <- xlist[[1]]
-  
+  if (!margin %in% c(1,2)){
+    stop(paste("margin was misspecified in clr.seurat, expected \"1\" (ADTs) or \"2\" (cells) and received \"",
+               margin, "\""))
+  }
+
   d.seurat <- Seurat::as.Seurat(x,
-                                counts = counts,
-                                data = NULL,
-                                assay = "ADT")
+                                counts = "counts")
   
   d.seurat <- Seurat::NormalizeData(d.seurat, verbose = FALSE, 
                                     normalization.method = "CLR", 
-                                    assay = "ADT",
                                     margin = margin)
   
-  adt.data <- Seurat::GetAssayData(d.seurat, assay = "ADT")
+  adt.data <- Seurat::GetAssayData(d.seurat, assay = "originalexp")
   idx <- match(colnames(adt.data),colnames(x))
   rownames(adt.data) <- rownames(x)
   
@@ -40,12 +40,11 @@ clr.seurat <- function(x, margin = NA, counts = "counts"){
     assay(x, "clr_adts") <- adt.data[,idx]
   } else if (margin == 2) {
     assay(x, "clr_cells") <- adt.data[,idx]
-  } else {
-    stop(paste("margin was misspecified in clr.seurat, expected \"1\" (ADTs) or \"2\" (cells) and received", margin))
-  }
+  } 
   
   return(x)
 }
+
 
 #' Use seurat normalization method for ADT counts
 #' across adts (margin = 1)

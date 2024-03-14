@@ -1,6 +1,6 @@
 ---
-title: "Results of pipeComp run on Hao and Kotliarov datasets (20,000 cells)"
-author: "Jonathan Haab"
+title: "PICS score on Hao and Kotliarov datasets"
+author: "Anthony Sonrel"
 date: "`r Sys.Date()`"
 output: 
   html_document: 
@@ -8,7 +8,7 @@ output:
     toc_float: yes
     theme: yeti
     highlight: tango
-    code_folding: show
+    code_folding: hide
     keep_md: no
 ---
 ```{r setup, include=FALSE}
@@ -20,17 +20,84 @@ options(bitmapType="cairo")
 
 ```{r}
 suppressPackageStartupMessages({
-library(pipeComp)
-library(ggplot2)
+# library(pipeComp)
+  library(ggplot2)
   library(SingleCellExperiment)
-library(tidyr)
-library(tidyverse)
-library(gridExtra)
+  library(tidyr)
+  library(tidyverse)
+  library(gridExtra)
   library(patchwork)
-library(cowplot)
+  library(cowplot)
+  library(reshape2)
+  library(rlist)
+  library(fBasics)
+  library(plotROC)
+  library(ComplexHeatmap)
+  library(circlize)
+  library(ggrepel)
+
 })
 source("../src/pics.R")
 source("../src/norm.R")
+
+## Subsample ? Mainly for interactive
+if (interactive()) SUBSAMPLING = 1000 else SUBSAMPLING = FALSE
+```
+
+
+The initial PICS score idea: 
+
+```{r pressure, echo=FALSE, fig.cap="A caption", out.width = '100%'}
+knitr::include_graphics("img/pics_schema2.png")
+```
+
+
+```{r}
+## UTILS
+
+do_pics_comb_plot <- function(dat, ks_pos = FALSE, ks_neg = FALSE, digits = 0){
+  # for each dataset
+  # iterate over isotype and positive markers
+  # calculate the pics score and
+  # display it on a score for the different normalization among the markers
+  out_ks <- list()
+  INDEX=0
+  for (i in names(dat)){
+    for (j in neg[[i]]){
+      for (k in pos[[i]]){
+        INDEX = INDEX+1
+        
+        datsub <- dat[[i]][c(j, k)]
+        norm_nam <- assayNames(datsub)
+        pics <- lapply(norm_nam, function(x) round(picsScore(datsub, x, ks_pos = ks_pos, ks_neg = ks_neg), digits))
+        names(pics) <- norm_nam
+        
+        # sort by score
+        norm_nam <- norm_nam[order(unlist(pics))]
+        
+        pos_pl <- lapply(norm_nam, function(x){
+          if(x == norm_nam[1]) xnam <- k else xnam <- ""
+          df <- data.frame(value = assay(datsub, x)[k,])
+          ggplot(df, aes(x=value)) + 
+            geom_histogram(fill = "#38761D") + ggtitle(paste0(x, " : ", pics[[x]])) +
+            ylab(xnam) + xlab("")
+        })
+        neg_pl <- lapply(norm_nam, function(x){
+          if(x == norm_nam[1]) xnam <- j else xnam <- ""
+          df <- data.frame(value = assay(datsub, x)[j,])
+          ggplot(df, aes(x=value)) + 
+            geom_histogram(fill = "#990000", alpha = 0.9)  + ylab(xnam) + xlab("")
+        })
+        out_ks[[paste(INDEX,i, j, k, sep = ",")]] <- wrap_plots(pos_pl, ncol = 1)  -
+          wrap_plots(neg_pl, ncol = 1)
+  
+      }
+    }
+  }
+
+  return(out_ks)
+}
+
 ```
 
 ## Data
@@ -41,12 +108,18 @@ dat <- lapply(dat, function(x) readRDS(paste0(x, "/d.rds")))
 names(dat) <- list.files("../data/")
 # only take the ADT as main sce
 dat <- lapply(dat, function(x) altExp(x))
+if(SUBSAMPLING != FALSE){
+  dat <- lapply(dat, function(x){
+    set.seed(1234)
+    x[ ,sample(ncol(x), SUBSAMPLING)]
+  })
+}
 dat
 ```
 
 
 ```{r}
-lapply(dat, function(x) rownames(x))
+# lapply(dat, function(x) rownames(x))
 ```
 
 ```{r}
@@ -69,21 +142,22 @@ dat[[2]]$phenoid[dat[[2]]$phenoid == "C8"] <- "non-classical monocytes"
 dat[[2]]$phenoid[dat[[2]]$phenoid == "C9"] <- "pDC"
 ```
 
-
-## Normalization
+Datasets with both isotypes and positive controls, used in this report: 
 
 ```{r}
-dat <- lapply(dat, function(x){
-  x <- logNormCounts(x)
-  x <- clr.seurat_adts(x)
-  x <- clr.seurat_cells(x)
-})
-dat
+tabledat <- data.frame(
+  # "Dataset" = names(dat), 
+  "N cells" = unlist(lapply(dat, ncol)), 
+  "N ADTs" = unlist(lapply(dat, nrow)),
+  "N isotypes" = unlist(lapply(dat, function(x) sum(rowData(x)$is.isotype))), 
+  "N positives" = unlist(lapply(dat, function(x) sum(rowData(x)$is.posControl))), 
+  "N cell types lvl 0" = unlist(lapply(dat, function(x) length(unique(x$phenoid)))), 
+  "N cell types lvl 1" = unlist(lapply(dat, function(x) length(unique(x$phenoid2)))), 
+  "N cell types lvl 2" = unlist(lapply(dat, function(x) length(unique(x$phenoid3)))) 
+)
+knitr::kable(t(tabledat))
 ```
-
-## PICS
-
-Positive and negative in each sce: 
+Positive and negative markers in each dataset, as defined by the authors of the studies: 
 
 ```{r}
 print("isotypes:")
@@ -92,7 +166,7 @@ print("isotypes:")
 }))
 
 
-
+print("positive controls:")
 (pos <- lapply(dat, function(x){
   rownames(rowData(x)[rowData(x)$is.posControl == TRUE, ])
 }))
@@ -100,92 +174,843 @@ print("isotypes:")
 
 ```
 
+## Preprocessing
+
+Normalization methods used: 
+
+- log normalized counts (`logNormCounts`)
+
+- centered-log ratio (CLR) ADT-wise
+
+- centered-log ratio (CLR) cell-wise
 
 ```{r}
-# for each dataset
-# iterate over isotype and positive markers
-# calculate the pics score and
-# display it on a score for the different normalization among the markers
-out <- list()
-for (i in names(dat)){
-  for (j in neg[[i]]){
-    for (k in pos[[i]]){
-      
-      datsub <- dat[[i]][c(j, k)]
-      norm_nam <- get_assay(datsub)
-      pics <- lapply(norm_nam, function(x) round(picsScore(datsub, x)))
-      names(pics) <- norm_nam
-      
-      # sort by score
-      norm_nam <- norm_nam[order(unlist(pics))]
-      
-      pos_pl <- lapply(norm_nam, function(x){
-        if(x == norm_nam[1]) xnam <- k else xnam <- ""
-        df <- data.frame(value = assay(datsub, x)[k,])
-        ggplot(df, aes(x=value)) + 
-          geom_histogram(fill = "#38761D") + ggtitle(paste0(x, " : ", pics[[x]])) +
-          ylab(xnam) + xlab("")
-      })
-      neg_pl <- lapply(norm_nam, function(x){
-        if(x == norm_nam[1]) xnam <- j else xnam <- ""
-        df <- data.frame(value = assay(datsub, x)[j,])
-        ggplot(df, aes(x=value)) + 
-          geom_histogram(fill = "#990000", alpha = 0.9)  + ylab(xnam) + xlab("")
-      })
-      
-      out[[paste(i, j, k, sep = ",")]] <- wrap_plots(pos_pl)  / 
-        wrap_plots(neg_pl)
+dat <- lapply(dat, function(x){
+  x <- logNormCounts(x)
+  logcounts(x) <- assay(x, "logNormCounts")
+  x <- clr.seurat_adts(x)
+  x <- clr.seurat_cells(x)
+  assay(x, "logNormCounts") <- NULL
+  x
+})
+dat
+```
 
-    }
-  }
+## PICS score
+
+
+PICS score calculation on different combinations of positive/ negative markers: 
+
+
+
+###  Original PICS score  {.tabset}
+
+```{r warning=FALSE, message=FALSE}
+out <- do_pics_comb_plot(dat, ks_pos = FALSE, digits = 0)
+```
+
+
+Some good examples, where higher score indicates a better segregation
+
+- **"2,hao_2020,Rat-IgG1-1,CD45RA" "3,hao_2020,Rat-IgG1-1,CD45RO" "4,hao_2020,Rat-IgG1-1,CD45-2"**
+
+Some bad examples, where higher score not necessarly indicates a better segregation: 
+
+- **"5,hao_2020,Rat-IgG1-1,CD45-1" "10,hao_2020,Rat-IgG2b,CD45-1" **
+
+```{r, results='asis', echo = FALSE,warning=FALSE, message=FALSE,eval=!interactive()}
+for (i in 1:length(out)) {
+  cat("#### ",names(out)[i],"\n")
+  print(out[[i]])
+  cat('\n\n')
 }
 ```
 
 
-```{r, fig.width=10, fig.height=6}
-out[[1]]
-```
+**POSSIBLE SOLUTION:** we could standardize the positive component of PICS score (t-stat). The *PICS negative* is bound to 0 - 10 but the *PICS positive* component (t-stat) can take higher values and have more important weights. 
 
-Good cases: 1 , 4
 
-Bad cases: 5
 
-```{r, fig.width=10, fig.height=6}
+### KS test stat for positive component: {.tabset}
 
+--> **Replace the tstat with a ks_pos stat from the PICS positive component. **
+
+IDEA: 
+
+Instead of using a t-statistic testing the difference between the positive and negative control, let's use the D statistics from the KS test (testing if two samples are drawn from the same distribution). 
+
+As a reminder, some examples seemed to be drawn by the positive component, and less influenced by the negative component (testing how the isotype fits 0). Below is a problematic example: the positive signal is closer to 0 but has a higher PICS score. 
+
+```{r}
 out[[5]]
 ```
 
-TODO: plot CD45 expression for each celltype
 
-TODO: higher quality screen shot
-
-TODO latter : compute maximum t stat that can happen in the distribution ? Because PICSneg is 0-10 but PICSpos can have higher number...
-
-```{r, fig.width=10, fig.height=6}
-
-(scater::plotExpression(dat[[1]],features = "CD45-1", x = "phenoid", exprs_values = "clr_cells",colour_by = "phenoid" ) + ylim(0,8)) / 
-  (scater::plotExpression(dat[[1]],features = "Rat-IgG1-1", x = "phenoid", exprs_values = "clr_cells", colour_by = "phenoid") + ylim(0,8))
-
+```{r warning=FALSE, message=FALSE}
+out <- do_pics_comb_plot(dat, ks_pos = TRUE, digits = 2)
 ```
 
 
-Mixed example: double population ? 
-
-```{r, fig.width=10, fig.height=6}
-out[[27]]
-```
-
-
-```{r, fig.width=10, fig.height=6}
-(scater::plotExpression(dat[[2]],features = "CD45RA", x = "phenoid", exprs_values = "clr_cells",colour_by = "phenoid" ) + ylim(0,8)) / 
-  (scater::plotExpression(dat[[2]], features = "RatIgG2bkIsotype", x = "phenoid", exprs_values = "clr_cells", colour_by = "phenoid") + ylim(0,8))
-
+```{r, results='asis', echo = FALSE,warning=FALSE, message=FALSE,eval=!interactive()}
+for (i in 1:length(out)) {
+  cat("#### ",names(out)[i],"\n")
+  print(out[[i]])
+  cat('\n\n')
+}
 ```
 
 
 
 
+### KS test for positive and negative components {.tabset}
 
 
+Replace also the negative component 
+
+1 / sd(X) * mean(X) + 0.1 
+
+By 
+
+1 / KSstat(X, 0)
+
+
+```{r warning=FALSE, message=FALSE}
+out <- do_pics_comb_plot(dat, ks_pos = TRUE, ks_neg = TRUE, digits = 2)
+```
+
+
+```{r, results='asis', echo = FALSE, warning=FALSE, message=FALSE, eval=!interactive()}
+for (i in 1:length(out)) {
+  cat("#### ",names(out)[i],"\n")
+  print(out[[i]])
+  cat('\n\n')
+}
+```
+
+## PICSneg vs PICSpos
+
+As a reminder, the global PICS score has: 
+
+- **A negative component** to assess how the isotype is brought to 0
+
+- **A positive component** to assess the 'segregation' of the positive component to the negative component
+
+### Original PICS score
+
+```{r}
+out_scores <- list()
+      
+norm_nam <- assayNames(dat[[1]])
+      
+for (ASSAY in norm_nam){
+  for (i in names(dat)){
+    for (j in neg[[i]]){
+      for (k in pos[[i]]){
+        
+        datsub <- dat[[i]][c(j, k)]
+        picspos <- round(picsScore(datsub, ASSAY, ks_pos = FALSE, positive_only = TRUE), 3)
+        picsneg <- round(picsScore(datsub, ASSAY, ks_pos = FALSE, negative_only = TRUE), 3)
+        out_scores[[ASSAY]][[paste(i, j, k, sep = ",")]] <- list(picspos, picsneg)
+
+      }
+    }
+  }
+}
+
+```
+
+```{r}
+pics_melt <- lapply(names(out_scores), function(x){
+  data.frame("PICS.pos" = unlist(lapply(out_scores[[x]], `[[`, 1)), 
+             "PICS.neg" = unlist(lapply(out_scores[[x]], `[[`, 2)), 
+             "normalization" = x)
+})
+
+
+pics_melt <- do.call(rbind, pics_melt)
+
+ggplot(pics_melt, aes(x=PICS.pos, y=PICS.neg, col = normalization)) + 
+geom_point() + geom_smooth(se = FALSE) + ggtitle("Positive vs Negative PICS score component\nOriginal PICS calculation") + 
+  xlab("PICS positive component") + ylab("PICS negative component")
+```
+
+
+### PICS score with KS stat for **positive component**
+
+```{r, message=FALSE, warning=FALSE}
+out_scores <- list()
+      
+norm_nam <- assayNames(dat[[1]])
+
+for (ASSAY in norm_nam){
+  for (i in names(dat)){
+    for (j in neg[[i]]){
+      for (k in pos[[i]]){
+        
+        datsub <- dat[[i]][c(j, k)]
+        picspos <- round(picsScore(datsub, ASSAY, ks_pos = TRUE, positive_only = TRUE), 3)
+        picsneg <- round(picsScore(datsub, ASSAY, ks_pos = TRUE, negative_only = TRUE), 3)
+        out_scores[[ASSAY]][[paste(i, j, k, sep = ",")]] <- list(picspos, picsneg)
+
+      }
+    }
+  }
+}
+
+```
+
+```{r}
+pics_melt <- lapply(names(out_scores), function(x){
+  data.frame("PICS.pos" = unlist(lapply(out_scores[[x]], `[[`, 1)), 
+             "PICS.neg" = unlist(lapply(out_scores[[x]], `[[`, 2)), 
+             "normalization" = x)
+})
+
+
+pics_melt <- do.call(rbind, pics_melt)
+
+ggplot(pics_melt, aes(x=PICS.pos, y=PICS.neg, col = normalization)) + 
+geom_point() + geom_smooth(se = FALSE) + ggtitle("Positive vs Negative PICS score component\nKS test in positive component") + 
+  xlab("PICS positive component") + ylab("PICS negative component")
+```
+
+
+### PICS score with KS stat for positive & **negative components**
+
+```{r, message=FALSE, warning=FALSE}
+out_scores <- list()
+      
+norm_nam <- assayNames(datsub)
+      
+for (ASSAY in norm_nam){
+  for (i in names(dat)){
+    for (j in neg[[i]]){
+      for (k in pos[[i]]){
+        
+        datsub <- dat[[i]][c(j, k)]
+        picspos <- round(picsScore(datsub, ASSAY, ks_pos = TRUE, ks_neg = TRUE, positive_only = TRUE), 3)
+        picsneg <- round(picsScore(datsub, ASSAY, ks_pos = TRUE, ks_neg = TRUE, negative_only = TRUE), 3)
+        out_scores[[ASSAY]][[paste(i, j, k, sep = ",")]] <- list(picspos, picsneg)
+
+      }
+    }
+  }
+}
+
+```
+
+```{r}
+pics_melt <- lapply(names(out_scores), function(x){
+  data.frame("PICS.pos" = unlist(lapply(out_scores[[x]], `[[`, 1)), 
+             "PICS.neg" = unlist(lapply(out_scores[[x]], `[[`, 2)), 
+             "normalization" = x)
+})
+
+
+pics_melt <- do.call(rbind, pics_melt)
+
+ggplot(pics_melt, aes(x=PICS.pos, y=PICS.neg, col = normalization)) + 
+geom_point() + geom_smooth(se = FALSE) + ggtitle("Positive vs Negative PICS score component\nKS test in positive & negative components") + 
+  xlab("PICS positive component") + ylab("PICS negative component")
+```
+
+**==> PICS neg using ks is not very good at differenciating signals** 
+## ROC curve {.tabset}
+
+Use somehow ROC and AUC score to define separation ?
+
+```{r}
+
+pos_temp <- assay(dat[["hao_2020"]], "clr_cells")["CD45RA", ]
+neg_temp <- assay(dat[["hao_2020"]], "clr_cells")["Rag-IgG2c", ]
+labels <- c(rep(0, length(neg_temp)), rep(1, length(pos_temp)))
+datroc <- data.frame(exprs = c(neg_temp, pos_temp), 
+                     status = labels)
+
+basicplot <- ggplot(datroc, aes(d = status, m = exprs)) + geom_roc()+ style_roc() + ggtitle("Example ROC curve \nCD45RA vs Rat-IgG1" )
+   
+basicplot + annotate("text", x = .75, y = .25, 
+           label = paste("AUC =", round(calc_auc(basicplot)$AUC, 2))) + 
+  ggplot(datroc[datroc$status == 0, ], aes(x=exprs)) + 
+            geom_histogram(data=subset(datroc, status == 1), fill = "#38761D", alpha = 0.5)  +
+            geom_histogram(data=subset(datroc, status == 0), fill = "#990000", alpha = 0.5) +
+            ylab("freq") + xlab("clr_cells") + 
+  ggtitle("CD45RA vs Rat-IgG1 expression")
+```
+
+```{r, message=FALSE,echo=FALSE, warning=FALSE}
+## ROC curves and AUC scores for all combinations of dataset, normalization, positive and negative
+
+INDEX = 0
+out_roc <- list()
+out_auc <- data.frame(matrix(ncol = 8, nrow = 0))
+x <- c("AUC", "PICS.ks", "PICS.ks.pos", "PICS.ks.neg", "normalization", 
+       "positive.marker", "negative.marker", "DS")
+colnames(out_auc) <- x
+
+
+for (i in names(dat)){
+  for (j in neg[[i]]){
+    for (k in pos[[i]]){
+      datsub <- dat[[i]][c(j, k)]
+      norm_nam <- assayNames(datsub)
+      for (l in norm_nam){
+              INDEX = INDEX + 1
+              
+              ## extract neg and positive expr and format in table
+              pos_i <- assay(datsub, l)[k, ]
+              neg_i <- assay(datsub, l)[j, ]
+              labels <- c(rep(0, length(neg_i)), rep(1, length(pos_i)))
+              datroc <- data.frame(exprs = c(neg_i, pos_i), 
+                     status = labels)
+              
+              ## calculate PICS scores
+              picspos <- round(picsScore(datsub, l, ks_pos = TRUE, ks_neg = TRUE, positive_only = TRUE), 3)
+              picsneg <- round(picsScore(datsub, l, ks_pos = TRUE, ks_neg = FALSE, negative_only = TRUE), 3)
+              picsglob <- round(picsScore(datsub, l, ks_pos = TRUE, ks_neg = FALSE), 3)
+              out_scores[[l]][[paste(i, j, k, sep = ",")]] <- list(picspos, picsneg)
+
+              ## plot roc and extract auc score from it
+              rocplot <-  ggplot(datroc, aes(d = status, m = exprs)) + geom_roc()+ style_roc() + 
+                ggtitle(paste0("ROC curve - ", k, " vs ", j, " \n",i, " dataset" ))
+              auc_temp <- round(calc_auc(rocplot)$AUC, 2)
+              
+              ## store plot + hist
+              out_roc[[INDEX]] <- rocplot + annotate("text", x = .75, y = .25, 
+           label = paste("AUC =", round(calc_auc(rocplot)$AUC, 2)))  +
+                ggplot(datroc[datroc$status == 0, ], aes(x=exprs)) + 
+                geom_histogram(data=subset(datroc, status == 1), fill = "#38761D", alpha = 0.5)  +
+                geom_histogram(data=subset(datroc, status == 0), fill = "#990000", alpha = 0.5) +
+                ylab("freq") + xlab(l) 
+                
+              ## stores roc score and metadata in table for this iter
+              out_auc <- rbind(out_auc, 
+                                      data.frame(AUC = auc_temp, 
+                                                 PICS.ks = picsglob, 
+                                                 PICS.ks.pos = picspos, 
+                                                 PICS.ks.neg = picsneg,
+                                                 normalization = l, 
+                                                 positive.marker = k, 
+                                                 negative.marker = j, 
+                                                 ds = i ) )
+      }
+    }
+  }
+}
+
+```
+
+
+```{r, results='asis', echo = FALSE,warning=FALSE, message=FALSE,eval=!interactive()}
+for (i in 1:length(out_roc)) {
+  cat("### ",names(out_roc)[i],"\n")
+  print(out_roc[[i]])
+  cat('\n\n')
+}
+```
+
+### Summary plots
+
+
+```{r, fig.height=5, fig.width=8}
+library(ggplot2)
+
+# Assuming your dataframe is named 'df' with numerical column 'num_col' and categorical column 'cat_col'
+ggplot(out_auc, aes(x = normalization, y = AUC, color = normalization)) +
+  geom_violin() + ggtitle("Effect of **normalization method** on AUC") 
+```
+
+[NEW]
+
+Are top scores in one method also top for other methods ? 
+
+```{r}
+out_auc$pair <- paste( out_auc$positive.marker, out_auc$negative.marker, out_auc$ds)
+ggplot(out_auc, aes(x = normalization, y = AUC, color = normalization)) +
+  geom_violin() + ggtitle("Effect of **normalization method** on AUC") + 
+  geom_line(aes(group=pair))
+```
+
+
+
+```{r, fig.height=5, fig.width=8}
+library(ggplot2)
+
+# Assuming your dataframe is named 'df' with numerical column 'num_col' and categorical column 'cat_col'
+ggplot(out_auc, aes(x = positive.marker, y = AUC, color = positive.marker)) +
+  geom_violin() + ggtitle("Effect of **positive markers** on AUC") 
+```
+
+
+```{r, fig.height=5, fig.width=8}
+
+# Assuming your dataframe is named 'df' with numerical column 'num_col' and categorical column 'cat_col'
+ggplot(out_auc, aes(x = negative.marker, y = AUC, color = negative.marker)) +
+  geom_violin() + ggtitle("Effect of **negative markers** on AUC")  + 
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+```
+
+```{r, fig.height=5, fig.width=8}
+library(ggplot2)
+
+# Assuming your dataframe is named 'df' with numerical column 'num_col' and categorical column 'cat_col'
+ggplot(out_auc, aes(x = ds, y = AUC, color = ds)) +
+  geom_violin() + ggtitle("Effect of dataset on AUC") 
+```
+
+Best AUC scores: 
+
+```{r}
+a <- head(out_auc[order(out_auc$AUC, decreasing = TRUE), ], 20) 
+  knitr::kable((a))
+  
+```
+
+AUC scores for positive vs negative markers: [NEW]
+
+```{r, fig.height=5, fig.width=8}
+library(viridis)
+ggplot(out_auc, aes(positive.marker, negative.marker, fill = AUC)) + 
+  geom_tile() + scale_fill_viridis() + xlab("Positive markers") + ylab("Negative markers")
+```
+
+AUC vs PICS (using KS components) [NEW]
+
+```{r, fig.height=5, fig.width=12}
+
+ggplot(out_auc, aes(x=AUC, y=PICS.ks, col = normalization)) + 
+geom_point() + geom_smooth(se = FALSE) + ggtitle("AUC vs PICS score") + 
+  xlab("AUC") + ylab("PICS global (ks)") +
+ggplot(out_auc, aes(x=AUC, y=PICS.ks.pos, col = normalization)) + 
+geom_point() + geom_smooth(se = FALSE) + 
+  xlab("AUC") + ylab("PICS positive (ks)") +
+ggplot(out_auc, aes(x=AUC, y=PICS.ks.neg, col = normalization)) + 
+geom_point() + geom_smooth(se = FALSE) + 
+  xlab("AUC") + ylab("PICS negative (ks)")
+```
+
+==> See in which case PICS > AUC and the opposite ? Integrate this into parameters..? 
+
+### Spot checks 
+
+
+**Max AUC, max PICS**
+
+```{r}
+
+out_auc <- out_auc[order(out_auc[,1], out_auc[,2], decreasing = TRUE), ]
+set.seed(1234)
+library(scater)
+dattemp <- runUMAP(dat[[out_auc$ds[1]]], exprs_values = out_auc$normalization[1])
+plotUMAP(dattemp, colour_by = "phenoid") + ggtitle (paste(out_auc$ds[1], out_auc$normalization[1]))
+
+```
+
+
+**Max AUC, low PICS**
+
+```{r}
+
+out_auc <- out_auc[order(out_auc[,1], -out_auc[,2], decreasing = TRUE), ]
+set.seed(1234)
+
+dattemp <- runUMAP(dat[[out_auc$ds[1]]], exprs_values = out_auc$normalization[1])
+plotUMAP(dattemp, colour_by = "phenoid") + ggtitle (paste(out_auc$ds[1], out_auc$normalization[1]))
+```
+**Low AUC, MAX PICS**
+
+```{r}
+
+out_auc <- out_auc[order(-out_auc[,1], out_auc[,2], decreasing = TRUE), ]
+set.seed(1234)
+
+dattemp <- runUMAP(dat[[out_auc$ds[1]]], exprs_values = out_auc$normalization[1])
+plotUMAP(dattemp, colour_by = "phenoid") + ggtitle (paste(out_auc$ds[1], out_auc$normalization[1]))
+```
+
+**Low AUC, low PICS**
+
+```{r}
+
+out_auc <- out_auc[order(-out_auc[,1], -out_auc[,2], decreasing = TRUE), ]
+
+dattemp <- runUMAP(dat[[out_auc$ds[1]]], exprs_values = out_auc$normalization[1])
+plotUMAP(dattemp, colour_by = "phenoid") + ggtitle (paste(out_auc$ds[1], out_auc$normalization[1]))
+```
+
+
+## CD45 expression 
+
+```{r, fig.width=8, fig.height=6}
+(scater::plotExpression(dat[[2]],features = "CD45RA", x = "phenoid", exprs_values = "clr_cells",colour_by = "phenoid" ) + ylim(0,8)+ 
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))) / 
+  (scater::plotExpression(dat[[2]], features = "RatIgG2bkIsotype", x = "phenoid", exprs_values = "clr_cells", colour_by = "phenoid") + ylim(0,8)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))) 
+  
+
+```
+
+CD45RA should be highly expressed in naive T cells --> check the AUC for these [NEW]
+
+```{r, message=FALSE,echo=FALSE, warning=FALSE}
+## ROC curves and AUC scores for all combinations of dataset, normalization, positive and negative
+
+out_auc_naive <- data.frame(matrix(ncol = 6, nrow = 0))
+x <- c("AUC", "type", "normalization", 
+       "positive.marker", "negative.marker", "DS")
+colnames(out_auc_naive) <- x
+
+for (i in names(dat)){
+  for (j in neg[[i]]){
+    k = "CD45RA"
+      datsub <- dat[[i]][c(j, k)]
+      if (i == "kotliarov_2020"){
+        datsub_naive <- datsub[, grep('naive', datsub$phenoid)]
+        datsub_nnnaive <- datsub[, -grep('naive', datsub$phenoid)]
+      } else {
+        datsub_naive <- datsub[, grep('Naive', datsub$phenoid2)]
+        datsub_nnnaive <- datsub[, -grep('Naive', datsub$phenoid2)]
+      }
+      
+      norm_nam <- assayNames(datsub)
+      for (l in norm_nam){
+
+              ## extract neg and positive expr FOR NAIVE -------------------
+              pos_i <- assay(datsub_naive, l)[k, ]
+              neg_i <- assay(datsub_naive, l)[j, ]
+              labels <- c(rep(0, length(neg_i)), rep(1, length(pos_i)))
+              datroc <- data.frame(exprs = c(neg_i, pos_i), 
+                     status = labels)
+
+              ## plot roc and extract auc score from it
+              rocplot <-  ggplot(datroc, aes(d = status, m = exprs)) + geom_roc()+ style_roc() 
+              auc_temp_naive <- round(calc_auc(rocplot)$AUC, 2)
+              
+              
+              ## extract neg and positive expr FOR NN-NAIVE -----------------
+              pos_i <- assay(datsub_nnnaive, l)[k, ]
+              neg_i <- assay(datsub_nnnaive, l)[j, ]
+              labels <- c(rep(0, length(neg_i)), rep(1, length(pos_i)))
+              datroc <- data.frame(exprs = c(neg_i, pos_i), 
+                     status = labels)
+
+              ## plot roc and extract auc score from it
+              rocplot <-  ggplot(datroc, aes(d = status, m = exprs)) + geom_roc()+ style_roc() 
+              auc_temp_nnnaive <- round(calc_auc(rocplot)$AUC, 2)
+          
+              ## stores roc score and metadata in table for this iter
+              out_auc_naive <- rbind(out_auc_naive, 
+                                      data.frame(AUC = auc_temp_naive, 
+                                                 type = "naive", 
+                                                 normalization = l, 
+                                                 positive.marker = k, 
+                                                 negative.marker = j, 
+                                                 ds = i ) )
+              out_auc_naive <- rbind(out_auc_naive, 
+                                      data.frame(AUC = auc_temp_nnnaive, 
+                                                 type = "non_naive", 
+                                                 normalization = l, 
+                                                 positive.marker = k, 
+                                                 negative.marker = j, 
+                                                 ds = i ) )
+      
+    }
+  }
+}
+
+```
+
+```{r}
+
+# Assuming your dataframe is named 'df' with numerical column 'num_col' and categorical column 'cat_col'
+ggplot(out_auc_naive, aes(x = type, y = AUC, color = type)) +
+  geom_violin() + ggtitle("AUC among naive vs non-naive T cells for\nCDRA as positive marker") 
+
+```
+
+
+
+CD45-1, which didn't perform good with AUC: [NEW]
+
+```{r, fig.width=8, fig.height=6}
+(scater::plotExpression(dat[[1]],features = "CD45-1", x = "phenoid", exprs_values = "clr_cells",colour_by = "phenoid" ) + ylim(0,8)+ 
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))) / 
+  (scater::plotExpression(dat[[2]], features = "RatIgG2bkIsotype", x = "phenoid", exprs_values = "clr_cells", colour_by = "phenoid") + ylim(0,8)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))) 
+  
+
+```
+
+
+
+```{r, fig.height=10, fig.width=8}
+rowData(dat[[1]])$avg_expression <- rowMeans(counts(dat[[1]]))
+rowData(dat[[1]])$avg_logcounts <- rowMeans(assay(dat[[1]], "logcounts"))
+rowData(dat[[1]])$avg_clr_adts <- rowMeans(assay(dat[[1]], "clr_adts"))
+rowData(dat[[1]])$avg_clr_cells <- rowMeans(assay(dat[[1]], "clr_cells"))
+tempdat <- as.data.frame(rowData(dat[[1]]))
+
+## plot
+plts <- lapply(grep("avg_", colnames(rowData(dat[[1]])), value = T), function(TRANSF){
+  ggplot(tempdat, aes(x = "",y=get(TRANSF))) + 
+    geom_violin(trim=FALSE) +  
+  geom_dotplot(binaxis='y', stackdir='center', dotsize=.1) + 
+  geom_label_repel(data = tempdat[tempdat$is.posControl == TRUE,],
+                    aes(label = marker_name),
+                   color = "darkgreen",
+                  box.padding   = 1, 
+                  point.padding = 1,
+                  segment.color = 'darkgreen') +
+    theme(axis.text.y = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  geom_label_repel(data = tempdat[tempdat$is.isotype == TRUE,],
+                    aes(label = marker_name),
+                   color = "darkred",
+                  box.padding   = 1, 
+                  point.padding = 1,
+                  segment.color = 'darkred') +
+    ylab(TRANSF)
+})
+wrap_plots(plts)
+```
+
+
+## Protein-protein correlation
+
+```{r}
+# Get lower triangle of the correlation matrix
+  get_lower_tri<-function(cormat){
+    cormat[upper.tri(cormat)] <- NA
+    return(cormat)
+  }
+  # Get upper triangle of the correlation matrix
+  get_upper_tri <- function(cormat){
+    cormat[lower.tri(cormat)]<- NA
+    return(cormat)
+  }
+```
+
+```{r}
+## correlation matrix
+# overall
+cor_res <- lapply(dat, function(x){
+  outx <- lapply(assayNames(x), function(y){
+    cor(as.matrix(t(assay(x, y))), method = "spearman")
+  })
+  names(outx) <- assayNames(x)
+  outx
+})
+
+# positive only
+cor_pos <- lapply(dat, function(x){
+  outx <- lapply(assayNames(x), function(y){
+
+    temp_mat <- as.matrix(t(assay(x, y)))
+    temp_mat <- temp_mat[, rowData(x)$is.posControl]
+
+    cor(temp_mat, method = "spearman")
+  })
+  names(outx) <- assayNames(x)
+  outx
+})
+
+# negative only
+cor_neg <- lapply(dat, function(x){
+  outx <- lapply(assayNames(x), function(y){
+
+    temp_mat <- as.matrix(t(assay(x, y)))
+    temp_mat <- temp_mat[, rowData(x)$is.isotype]
+
+    cor(temp_mat, method = "spearman")
+  })
+  names(outx) <- assayNames(x)
+  outx
+})
+
+```
+
+
+
+```{r}
+
+## get lower triangle matrix and melt
+cor_res <- list.flatten(cor_res)
+lower_tri <- lapply(cor_res, get_lower_tri)
+melted_cormat <- lapply(lower_tri, function(x) melt(x, na.rm = TRUE))
+
+cor_pos <- list.flatten(cor_pos)
+lower_tri_pos <- lapply(cor_pos, get_lower_tri)
+melted_cormat_pos <- lapply(lower_tri_pos, function(x) melt(x, na.rm = TRUE))
+
+cor_neg <- list.flatten(cor_neg)
+lower_tri_neg <- lapply(cor_neg, get_lower_tri)
+melted_cormat_neg <- lapply(lower_tri_neg, function(x) melt(x, na.rm = TRUE))
+
+```
+
+```{r}
+## OVERAL PROTEIN-PROTEIN CORRELATION WITH NO HIERARCHICAL CLUSTERING
+## NOT VERY USEFULL AT THE MOMENT 
+# ggplot(data = melted_cormat$hao_2020.counts, aes(Var1, Var2, fill = value))+
+#  geom_tile(color = "white")+
+#  scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+#    midpoint = 0, limit = c(-1,1), space = "Lab", 
+#    name="Pearson\nCorrelation") +
+#   theme_minimal()+ 
+#  theme(axis.text.x = element_text(angle = 45, vjust = 1, 
+#     size = 12, hjust = 1))+
+#  coord_fixed()
+```
+
+
+### Overall protein - protein correlation 
+
+```{r}
+
+col_fun = colorRamp2(c(-1, 0, 1), c("blue", "white", "red"))
+# Heatmap(cor_res$hao_2020.counts, col = col_fun, column_title = "mat1", 
+#         show_row_names = FALSE, show_column_names = FALSE)
+
+grid.newpage()
+pushViewport(viewport(layout = grid.layout(nr = 2, nc = 2)))
+
+pushViewport(viewport(layout.pos.row = 1, layout.pos.col = 1))
+draw(Heatmap(cor_res$hao_2020.counts, col = col_fun, column_title = "raw counts", 
+             show_heatmap_legend = TRUE, show_row_names = FALSE, show_column_names = FALSE), newpage = FALSE)
+upViewport()
+
+pushViewport(viewport(layout.pos.row = 1, layout.pos.col = 2))
+draw(Heatmap(cor_res$hao_2020.logcounts, col = col_fun, column_title = "logCounts", show_heatmap_legend = TRUE, show_row_names = FALSE, show_column_names = FALSE), newpage = FALSE)
+upViewport()
+
+pushViewport(viewport(layout.pos.row = 2, layout.pos.col = 1))
+draw(Heatmap(cor_res$hao_2020.clr_adts, col = col_fun, column_title = "CLR-ADTs", show_heatmap_legend = TRUE, show_row_names = FALSE, show_column_names = FALSE), newpage = FALSE)
+upViewport()
+
+pushViewport(viewport(layout.pos.row = 2, layout.pos.col = 2))
+draw(Heatmap(cor_res$hao_2020.clr_cells, col = col_fun, column_title = "CLR-cells", show_heatmap_legend = TRUE, show_row_names = FALSE, show_column_names = FALSE), newpage = FALSE)
+upViewport()
+
+```
+
+
+```{r}
+# Density curve
+plts <- lapply(grep("hao", names(melted_cormat), value = TRUE), function(x){
+  ggplot(melted_cormat[[x]], aes(x=value)) + geom_density() + 
+    xlab("correlation") + ggtitle(gsub("hao_2020\\.", "", x))
+})
+patchwork::wrap_plots(plts, ncol = 2)
+
+```
+
+**Raw counts** have the highest protein-protein correlation! Could be used in the PICS score ? 
+
+
+### **Positive** protein - protein correlation 
+
+```{r}
+
+grid.newpage()
+pushViewport(viewport(layout = grid.layout(nr = 2, nc = 2)))
+
+pushViewport(viewport(layout.pos.row = 1, layout.pos.col = 1))
+draw(Heatmap(cor_pos$hao_2020.counts, col = col_fun, column_title = "raw counts", 
+             show_heatmap_legend = TRUE, show_row_names = FALSE, show_column_names = FALSE), newpage = FALSE)
+upViewport()
+
+pushViewport(viewport(layout.pos.row = 1, layout.pos.col = 2))
+draw(Heatmap(cor_pos$hao_2020.logcounts, col = col_fun, column_title = "logCounts", show_heatmap_legend = TRUE, show_row_names = FALSE, show_column_names = FALSE), newpage = FALSE)
+upViewport()
+
+pushViewport(viewport(layout.pos.row = 2, layout.pos.col = 1))
+draw(Heatmap(cor_pos$hao_2020.clr_adts, col = col_fun, column_title = "CLR-ADTs", show_heatmap_legend = TRUE, show_row_names = FALSE, show_column_names = FALSE), newpage = FALSE)
+upViewport()
+
+pushViewport(viewport(layout.pos.row = 2, layout.pos.col = 2))
+draw(Heatmap(cor_pos$hao_2020.clr_cells, col = col_fun, column_title = "CLR-cells", show_heatmap_legend = TRUE, show_row_names = FALSE, show_column_names = FALSE), newpage = FALSE)
+upViewport()
+
+```
+
+```{r}
+# Density curve
+plts <- lapply(grep("hao", names(melted_cormat_pos), value = TRUE), function(x){
+  ggplot(melted_cormat_pos[[x]], aes(x=value)) + geom_density() + 
+    xlab("correlation") + ggtitle(gsub("hao_2020\\.", "", x))
+})
+patchwork::wrap_plots(plts, ncol = 2)
+
+```
+
+
+
+### **Negative** protein - protein correlation 
+
+```{r}
+
+grid.newpage()
+pushViewport(viewport(layout = grid.layout(nr = 2, nc = 2)))
+
+pushViewport(viewport(layout.pos.row = 1, layout.pos.col = 1))
+draw(Heatmap(cor_neg$hao_2020.counts, col = col_fun, column_title = "raw counts", 
+             show_heatmap_legend = TRUE, show_row_names = FALSE, show_column_names = FALSE), newpage = FALSE)
+upViewport()
+
+pushViewport(viewport(layout.pos.row = 1, layout.pos.col = 2))
+draw(Heatmap(cor_neg$hao_2020.logcounts, col = col_fun, column_title = "logCounts", show_heatmap_legend = TRUE, show_row_names = FALSE, show_column_names = FALSE), newpage = FALSE)
+upViewport()
+
+pushViewport(viewport(layout.pos.row = 2, layout.pos.col = 1))
+draw(Heatmap(cor_neg$hao_2020.clr_adts, col = col_fun, column_title = "CLR-ADTs", show_heatmap_legend = TRUE, show_row_names = FALSE, show_column_names = FALSE), newpage = FALSE)
+upViewport()
+
+pushViewport(viewport(layout.pos.row = 2, layout.pos.col = 2))
+draw(Heatmap(cor_neg$hao_2020.clr_cells, col = col_fun, column_title = "CLR-cells", show_heatmap_legend = TRUE, show_row_names = FALSE, show_column_names = FALSE), newpage = FALSE)
+upViewport()
+
+```
+
+```{r}
+# Density curve
+plts <- lapply(grep("hao", names(melted_cormat_neg), value = TRUE), function(x){
+  ggplot(melted_cormat_neg[[x]], aes(x=value)) + geom_density() + 
+    xlab("correlation") + ggtitle(gsub("hao_2020\\.", "", x))
+})
+patchwork::wrap_plots(plts, ncol = 2)
+
+```
+## Z-score calculation
+
+Z-score transformation of positive and negative components. This method standardizes each sub-score individually and then combines them with equal weights. **Steps:**
+
+- Standardize the sub-scores:
+        Calculate the mean (μ) and standard deviation (σ) for each of the two sub-scores separately (based on the distribution of sub-scores across all positive-negative combinations for a given normalization). For each sub-score, subtract the mean (μ) and divide by the standard deviation (σ) to obtain the Z-score for each sub-score. Let's call these Z1 and Z2.
+
+-  Combine the standardized Z-scores with equal weights: Add the two standardized Z-scores (Z1 and Z2) with equal weights (e.g., weight of 0.5 for each). This combined Z-score is the global standardized score.
+
+The advantage of this approach is that it ensures that both sub-scores have equal weights (0.5 each) and that the resulting global score is standardized. Standardization makes the resulting score comparable across different input distributions because it scales the score to have a mean of 0 and a standard deviation of 1.
+
+
+**Pros:**
+
+- Equal Weights: This method assigns equal importance to both sub-scores, which may be desirable when we want both components to contribute equally to the global score.
+
+- Standardization: Standardizing the resulting score ensures that it is on a common scale with a mean of 0 and a standard deviation of 1, making it directly comparable across different input distributions.
+
+- Preserves Information: Standardization retains the relative ranking and spread of the original sub-scores while making them comparable.
+
+**Cons:**
+
+- Assumes Equal Importance: If we have reasons to believe that one of the sub-scores should have a higher or lower weight than the other, this method does not allow for different weighting.
+
+- Sensitivity to Outliers: Like any method that involves means and standard deviations, this approach can be sensitive to extreme values or outliers in the sub-scores.
+
+- Requires Knowledge of Mean and Standard Deviation: You need to know the mean and standard deviation of each sub-score, which may not be available in all cases.
+
+Overall, if we want equal weights and standardized comparability across different input distributions for two sub-scores with different ranges, the Z-score transformation is a suitable method. However, consider the assumptions and potential sensitivity to outliers when applying this approach.
+
+
+
+```{r}
+sessionInfo()
+```
 
 
