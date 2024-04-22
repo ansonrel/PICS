@@ -55,7 +55,7 @@ knitr::include_graphics("img/pics_schema2.png")
 ```{r}
 ## UTILS
 
-do_pics_comb_plot <- function(dat, ks_pos = FALSE, ks_neg = FALSE, digits = 0){
+do_pics_comb_plot <- function(dat, ks_pos = FALSE, neg_fun = "med_sd", digits = 0){
   # for each dataset
   # iterate over isotype and positive markers
   # calculate the pics score and
@@ -69,7 +69,7 @@ do_pics_comb_plot <- function(dat, ks_pos = FALSE, ks_neg = FALSE, digits = 0){
         
         datsub <- dat[[i]][c(j, k)]
         norm_nam <- assayNames(datsub)
-        pics <- lapply(norm_nam, function(x) round(picsScore(datsub, x, ks_pos = ks_pos, ks_neg = ks_neg), digits))
+        pics <- lapply(norm_nam, function(x) round(picsScore(datsub, x, ks_pos = ks_pos, neg_fun = neg_fun), digits))
         names(pics) <- norm_nam
         
         # sort by score
@@ -100,7 +100,7 @@ do_pics_comb_plot <- function(dat, ks_pos = FALSE, ks_neg = FALSE, digits = 0){
 
 ```
 
-## Data
+## Load data
 
 ```{r}
 dat <- list.files("../data", full.names = TRUE)
@@ -196,12 +196,27 @@ dat <- lapply(dat, function(x){
 dat
 ```
 
+
+
+
+
+
+
+
+
+
+
+
+
+<!-- ================================================ -->
+<!-- ================================================ -->
+<!-- ================================================ -->
+
+
+
 ## PICS score
 
-
 PICS score calculation on different combinations of positive/ negative markers: 
-
-
 
 ###  Original PICS score  {.tabset}
 
@@ -275,7 +290,7 @@ By
 
 
 ```{r warning=FALSE, message=FALSE}
-out <- do_pics_comb_plot(dat, ks_pos = TRUE, ks_neg = TRUE, digits = 2)
+out <- do_pics_comb_plot(dat, ks_pos = TRUE, neg_fun = "KS", digits = 2)
 ```
 
 
@@ -388,8 +403,8 @@ for (ASSAY in norm_nam){
       for (k in pos[[i]]){
         
         datsub <- dat[[i]][c(j, k)]
-        picspos <- round(picsScore(datsub, ASSAY, ks_pos = TRUE, ks_neg = TRUE, positive_only = TRUE), 3)
-        picsneg <- round(picsScore(datsub, ASSAY, ks_pos = TRUE, ks_neg = TRUE, negative_only = TRUE), 3)
+        picspos <- round(picsScore(datsub, ASSAY, ks_pos = TRUE, neg_fun = "KS", positive_only = TRUE), 3)
+        picsneg <- round(picsScore(datsub, ASSAY, ks_pos = TRUE, neg_fun = "KS", negative_only = TRUE), 3)
         out_scores[[ASSAY]][[paste(i, j, k, sep = ",")]] <- list(picspos, picsneg)
 
       }
@@ -400,6 +415,7 @@ for (ASSAY in norm_nam){
 ```
 
 ```{r}
+
 pics_melt <- lapply(names(out_scores), function(x){
   data.frame("PICS.pos" = unlist(lapply(out_scores[[x]], `[[`, 1)), 
              "PICS.neg" = unlist(lapply(out_scores[[x]], `[[`, 2)), 
@@ -415,6 +431,47 @@ geom_point() + geom_smooth(se = FALSE) + ggtitle("Positive vs Negative PICS scor
 ```
 
 **==> PICS neg using ks is not very good at differenciating signals** 
+
+
+Checking the plateau of PICS negative at ~1.67. 
+
+Taking 2 examples: 
+- clr_cells$`kotliarov_2020,RatIgG2bkIsotype,CD45RO
+- counts$`hao_2020,Rag-IgG2c,CD45RB
+
+```{r}
+datsub1 <- dat[['kotliarov_2020']][c('RatIgG2bkIsotype', 'CD45RO')]
+(picsneg1 <- round(picsScore(datsub1, 'clr_cells', ks_pos = TRUE, neg_fun = "KS", negative_only = TRUE), 3))
+datsub2 <- dat[['hao_2020']][c('Rag-IgG2c', 'CD45RB')]
+(picsneg2 <- round(picsScore(datsub2, 'counts', ks_pos = TRUE, neg_fun = "KS", negative_only = TRUE), 3))
+
+scater::plotExpression(datsub1, features = rownames(datsub1), exprs_values =  'clr_cells') + 
+  scater::plotExpression(datsub2, features = rownames(datsub2), exprs_values =  'counts') 
+```
+
+Checking the negative compoment only
+
+```{r}
+d1 <- assay(datsub1, 'clr_cells')[1,]
+# Shift values toward zero
+d1 <- d1 - min(d1)
+# Scale so that distribution is between 0 and 1
+d1 <- d1/max(d1)
+boxplot(d1, main = paste0("One sample KS stat: ", ks.test(d1, y = "pnorm", 0, alternative = "two.sided")$statistic))
+
+
+d2 <- assay(datsub2, 'counts')[1,]
+# Shift values toward zero
+d2 <- d2 - min(d2)
+# Scale so that distribution is between 0 and 1
+d2 <- d2/max(d2)
+boxplot(d2, main = paste0("One sample KS stat: ", ks.test(d2, y = "pnorm", 0, alternative = "two.sided")$statistic
+))
+
+```
+
+
+
 ## ROC curve {.tabset}
 
 Use somehow ROC and AUC score to define separation ?
@@ -465,9 +522,9 @@ for (i in names(dat)){
                      status = labels)
               
               ## calculate PICS scores
-              picspos <- round(picsScore(datsub, l, ks_pos = TRUE, ks_neg = TRUE, positive_only = TRUE), 3)
-              picsneg <- round(picsScore(datsub, l, ks_pos = TRUE, ks_neg = FALSE, negative_only = TRUE), 3)
-              picsglob <- round(picsScore(datsub, l, ks_pos = TRUE, ks_neg = FALSE), 3)
+              picspos <- round(picsScore(datsub, l, ks_pos = TRUE, neg_fun = "KS", positive_only = TRUE), 3)
+              picsneg <- round(picsScore(datsub, l, ks_pos = TRUE, neg_fun = "med_sd", negative_only = TRUE), 3)
+              picsglob <- round(picsScore(datsub, l, ks_pos = TRUE, neg_fun = "med_sd"), 3)
               out_scores[[l]][[paste(i, j, k, sep = ",")]] <- list(picspos, picsneg)
 
               ## plot roc and extract auc score from it
@@ -520,7 +577,7 @@ ggplot(out_auc, aes(x = normalization, y = AUC, color = normalization)) +
   geom_violin() + ggtitle("Effect of **normalization method** on AUC") 
 ```
 
-[NEW]
+
 
 Are top scores in one method also top for other methods ? 
 
@@ -566,7 +623,7 @@ a <- head(out_auc[order(out_auc$AUC, decreasing = TRUE), ], 20)
   
 ```
 
-AUC scores for positive vs negative markers: [NEW]
+AUC scores for positive vs negative markers: 
 
 ```{r, fig.height=5, fig.width=8}
 library(viridis)
@@ -574,7 +631,7 @@ ggplot(out_auc, aes(positive.marker, negative.marker, fill = AUC)) +
   geom_tile() + scale_fill_viridis() + xlab("Positive markers") + ylab("Negative markers")
 ```
 
-AUC vs PICS (using KS components) [NEW]
+AUC vs PICS (using KS components) 
 
 ```{r, fig.height=5, fig.width=12}
 
@@ -649,7 +706,7 @@ plotUMAP(dattemp, colour_by = "phenoid") + ggtitle (paste(out_auc$ds[1], out_auc
 
 ```
 
-CD45RA should be highly expressed in naive T cells --> check the AUC for these [NEW]
+CD45RA should be highly expressed in naive T cells --> check the AUC for these 
 
 ```{r, message=FALSE,echo=FALSE, warning=FALSE}
 ## ROC curves and AUC scores for all combinations of dataset, normalization, positive and negative
@@ -729,7 +786,7 @@ ggplot(out_auc_naive, aes(x = type, y = AUC, color = type)) +
 
 
 
-CD45-1, which didn't perform good with AUC: [NEW]
+CD45-1, which didn't perform good with AUC: 
 
 ```{r, fig.width=8, fig.height=6}
 (scater::plotExpression(dat[[1]],features = "CD45-1", x = "phenoid", exprs_values = "clr_cells",colour_by = "phenoid" ) + ylim(0,8)+ 
@@ -772,211 +829,211 @@ wrap_plots(plts)
 ```
 
 
-## Protein-protein correlation
+<!-- ## Protein-protein correlation -->
 
-```{r}
-# Get lower triangle of the correlation matrix
-  get_lower_tri<-function(cormat){
-    cormat[upper.tri(cormat)] <- NA
-    return(cormat)
-  }
-  # Get upper triangle of the correlation matrix
-  get_upper_tri <- function(cormat){
-    cormat[lower.tri(cormat)]<- NA
-    return(cormat)
-  }
-```
+<!-- ```{r} -->
+<!-- # Get lower triangle of the correlation matrix -->
+<!--   get_lower_tri<-function(cormat){ -->
+<!--     cormat[upper.tri(cormat)] <- NA -->
+<!--     return(cormat) -->
+<!--   } -->
+<!--   # Get upper triangle of the correlation matrix -->
+<!--   get_upper_tri <- function(cormat){ -->
+<!--     cormat[lower.tri(cormat)]<- NA -->
+<!--     return(cormat) -->
+<!--   } -->
+<!-- ``` -->
 
-```{r}
-## correlation matrix
-# overall
-cor_res <- lapply(dat, function(x){
-  outx <- lapply(assayNames(x), function(y){
-    cor(as.matrix(t(assay(x, y))), method = "spearman")
-  })
-  names(outx) <- assayNames(x)
-  outx
-})
+<!-- ```{r} -->
+<!-- ## correlation matrix -->
+<!-- # overall -->
+<!-- cor_res <- lapply(dat, function(x){ -->
+<!--   outx <- lapply(assayNames(x), function(y){ -->
+<!--     cor(as.matrix(t(assay(x, y))), method = "spearman") -->
+<!--   }) -->
+<!--   names(outx) <- assayNames(x) -->
+<!--   outx -->
+<!-- }) -->
 
-# positive only
-cor_pos <- lapply(dat, function(x){
-  outx <- lapply(assayNames(x), function(y){
+<!-- # positive only -->
+<!-- cor_pos <- lapply(dat, function(x){ -->
+<!--   outx <- lapply(assayNames(x), function(y){ -->
 
-    temp_mat <- as.matrix(t(assay(x, y)))
-    temp_mat <- temp_mat[, rowData(x)$is.posControl]
+<!--     temp_mat <- as.matrix(t(assay(x, y))) -->
+<!--     temp_mat <- temp_mat[, rowData(x)$is.posControl] -->
 
-    cor(temp_mat, method = "spearman")
-  })
-  names(outx) <- assayNames(x)
-  outx
-})
+<!--     cor(temp_mat, method = "spearman") -->
+<!--   }) -->
+<!--   names(outx) <- assayNames(x) -->
+<!--   outx -->
+<!-- }) -->
 
-# negative only
-cor_neg <- lapply(dat, function(x){
-  outx <- lapply(assayNames(x), function(y){
+<!-- # negative only -->
+<!-- cor_neg <- lapply(dat, function(x){ -->
+<!--   outx <- lapply(assayNames(x), function(y){ -->
 
-    temp_mat <- as.matrix(t(assay(x, y)))
-    temp_mat <- temp_mat[, rowData(x)$is.isotype]
+<!--     temp_mat <- as.matrix(t(assay(x, y))) -->
+<!--     temp_mat <- temp_mat[, rowData(x)$is.isotype] -->
 
-    cor(temp_mat, method = "spearman")
-  })
-  names(outx) <- assayNames(x)
-  outx
-})
+<!--     cor(temp_mat, method = "spearman") -->
+<!--   }) -->
+<!--   names(outx) <- assayNames(x) -->
+<!--   outx -->
+<!-- }) -->
 
-```
-
-
-
-```{r}
-
-## get lower triangle matrix and melt
-cor_res <- list.flatten(cor_res)
-lower_tri <- lapply(cor_res, get_lower_tri)
-melted_cormat <- lapply(lower_tri, function(x) melt(x, na.rm = TRUE))
-
-cor_pos <- list.flatten(cor_pos)
-lower_tri_pos <- lapply(cor_pos, get_lower_tri)
-melted_cormat_pos <- lapply(lower_tri_pos, function(x) melt(x, na.rm = TRUE))
-
-cor_neg <- list.flatten(cor_neg)
-lower_tri_neg <- lapply(cor_neg, get_lower_tri)
-melted_cormat_neg <- lapply(lower_tri_neg, function(x) melt(x, na.rm = TRUE))
-
-```
-
-```{r}
-## OVERAL PROTEIN-PROTEIN CORRELATION WITH NO HIERARCHICAL CLUSTERING
-## NOT VERY USEFULL AT THE MOMENT 
-# ggplot(data = melted_cormat$hao_2020.counts, aes(Var1, Var2, fill = value))+
-#  geom_tile(color = "white")+
-#  scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
-#    midpoint = 0, limit = c(-1,1), space = "Lab", 
-#    name="Pearson\nCorrelation") +
-#   theme_minimal()+ 
-#  theme(axis.text.x = element_text(angle = 45, vjust = 1, 
-#     size = 12, hjust = 1))+
-#  coord_fixed()
-```
-
-
-### Overall protein - protein correlation 
-
-```{r}
-
-col_fun = colorRamp2(c(-1, 0, 1), c("blue", "white", "red"))
-# Heatmap(cor_res$hao_2020.counts, col = col_fun, column_title = "mat1", 
-#         show_row_names = FALSE, show_column_names = FALSE)
-
-grid.newpage()
-pushViewport(viewport(layout = grid.layout(nr = 2, nc = 2)))
-
-pushViewport(viewport(layout.pos.row = 1, layout.pos.col = 1))
-draw(Heatmap(cor_res$hao_2020.counts, col = col_fun, column_title = "raw counts", 
-             show_heatmap_legend = TRUE, show_row_names = FALSE, show_column_names = FALSE), newpage = FALSE)
-upViewport()
-
-pushViewport(viewport(layout.pos.row = 1, layout.pos.col = 2))
-draw(Heatmap(cor_res$hao_2020.logcounts, col = col_fun, column_title = "logCounts", show_heatmap_legend = TRUE, show_row_names = FALSE, show_column_names = FALSE), newpage = FALSE)
-upViewport()
-
-pushViewport(viewport(layout.pos.row = 2, layout.pos.col = 1))
-draw(Heatmap(cor_res$hao_2020.clr_adts, col = col_fun, column_title = "CLR-ADTs", show_heatmap_legend = TRUE, show_row_names = FALSE, show_column_names = FALSE), newpage = FALSE)
-upViewport()
-
-pushViewport(viewport(layout.pos.row = 2, layout.pos.col = 2))
-draw(Heatmap(cor_res$hao_2020.clr_cells, col = col_fun, column_title = "CLR-cells", show_heatmap_legend = TRUE, show_row_names = FALSE, show_column_names = FALSE), newpage = FALSE)
-upViewport()
-
-```
-
-
-```{r}
-# Density curve
-plts <- lapply(grep("hao", names(melted_cormat), value = TRUE), function(x){
-  ggplot(melted_cormat[[x]], aes(x=value)) + geom_density() + 
-    xlab("correlation") + ggtitle(gsub("hao_2020\\.", "", x))
-})
-patchwork::wrap_plots(plts, ncol = 2)
-
-```
-
-**Raw counts** have the highest protein-protein correlation! Could be used in the PICS score ? 
-
-
-### **Positive** protein - protein correlation 
-
-```{r}
-
-grid.newpage()
-pushViewport(viewport(layout = grid.layout(nr = 2, nc = 2)))
-
-pushViewport(viewport(layout.pos.row = 1, layout.pos.col = 1))
-draw(Heatmap(cor_pos$hao_2020.counts, col = col_fun, column_title = "raw counts", 
-             show_heatmap_legend = TRUE, show_row_names = FALSE, show_column_names = FALSE), newpage = FALSE)
-upViewport()
-
-pushViewport(viewport(layout.pos.row = 1, layout.pos.col = 2))
-draw(Heatmap(cor_pos$hao_2020.logcounts, col = col_fun, column_title = "logCounts", show_heatmap_legend = TRUE, show_row_names = FALSE, show_column_names = FALSE), newpage = FALSE)
-upViewport()
-
-pushViewport(viewport(layout.pos.row = 2, layout.pos.col = 1))
-draw(Heatmap(cor_pos$hao_2020.clr_adts, col = col_fun, column_title = "CLR-ADTs", show_heatmap_legend = TRUE, show_row_names = FALSE, show_column_names = FALSE), newpage = FALSE)
-upViewport()
-
-pushViewport(viewport(layout.pos.row = 2, layout.pos.col = 2))
-draw(Heatmap(cor_pos$hao_2020.clr_cells, col = col_fun, column_title = "CLR-cells", show_heatmap_legend = TRUE, show_row_names = FALSE, show_column_names = FALSE), newpage = FALSE)
-upViewport()
-
-```
-
-```{r}
-# Density curve
-plts <- lapply(grep("hao", names(melted_cormat_pos), value = TRUE), function(x){
-  ggplot(melted_cormat_pos[[x]], aes(x=value)) + geom_density() + 
-    xlab("correlation") + ggtitle(gsub("hao_2020\\.", "", x))
-})
-patchwork::wrap_plots(plts, ncol = 2)
-
-```
+<!-- ``` -->
 
 
 
-### **Negative** protein - protein correlation 
+<!-- ```{r} -->
 
-```{r}
+<!-- ## get lower triangle matrix and melt -->
+<!-- cor_res <- list.flatten(cor_res) -->
+<!-- lower_tri <- lapply(cor_res, get_lower_tri) -->
+<!-- melted_cormat <- lapply(lower_tri, function(x) melt(x, na.rm = TRUE)) -->
 
-grid.newpage()
-pushViewport(viewport(layout = grid.layout(nr = 2, nc = 2)))
+<!-- cor_pos <- list.flatten(cor_pos) -->
+<!-- lower_tri_pos <- lapply(cor_pos, get_lower_tri) -->
+<!-- melted_cormat_pos <- lapply(lower_tri_pos, function(x) melt(x, na.rm = TRUE)) -->
 
-pushViewport(viewport(layout.pos.row = 1, layout.pos.col = 1))
-draw(Heatmap(cor_neg$hao_2020.counts, col = col_fun, column_title = "raw counts", 
-             show_heatmap_legend = TRUE, show_row_names = FALSE, show_column_names = FALSE), newpage = FALSE)
-upViewport()
+<!-- cor_neg <- list.flatten(cor_neg) -->
+<!-- lower_tri_neg <- lapply(cor_neg, get_lower_tri) -->
+<!-- melted_cormat_neg <- lapply(lower_tri_neg, function(x) melt(x, na.rm = TRUE)) -->
 
-pushViewport(viewport(layout.pos.row = 1, layout.pos.col = 2))
-draw(Heatmap(cor_neg$hao_2020.logcounts, col = col_fun, column_title = "logCounts", show_heatmap_legend = TRUE, show_row_names = FALSE, show_column_names = FALSE), newpage = FALSE)
-upViewport()
+<!-- ``` -->
 
-pushViewport(viewport(layout.pos.row = 2, layout.pos.col = 1))
-draw(Heatmap(cor_neg$hao_2020.clr_adts, col = col_fun, column_title = "CLR-ADTs", show_heatmap_legend = TRUE, show_row_names = FALSE, show_column_names = FALSE), newpage = FALSE)
-upViewport()
+<!-- ```{r} -->
+<!-- ## OVERAL PROTEIN-PROTEIN CORRELATION WITH NO HIERARCHICAL CLUSTERING -->
+<!-- ## NOT VERY USEFULL AT THE MOMENT  -->
+<!-- # ggplot(data = melted_cormat$hao_2020.counts, aes(Var1, Var2, fill = value))+ -->
+<!-- #  geom_tile(color = "white")+ -->
+<!-- #  scale_fill_gradient2(low = "blue", high = "red", mid = "white",  -->
+<!-- #    midpoint = 0, limit = c(-1,1), space = "Lab",  -->
+<!-- #    name="Pearson\nCorrelation") + -->
+<!-- #   theme_minimal()+  -->
+<!-- #  theme(axis.text.x = element_text(angle = 45, vjust = 1,  -->
+<!-- #     size = 12, hjust = 1))+ -->
+<!-- #  coord_fixed() -->
+<!-- ``` -->
 
-pushViewport(viewport(layout.pos.row = 2, layout.pos.col = 2))
-draw(Heatmap(cor_neg$hao_2020.clr_cells, col = col_fun, column_title = "CLR-cells", show_heatmap_legend = TRUE, show_row_names = FALSE, show_column_names = FALSE), newpage = FALSE)
-upViewport()
 
-```
+<!-- ### Overall protein - protein correlation  -->
 
-```{r}
-# Density curve
-plts <- lapply(grep("hao", names(melted_cormat_neg), value = TRUE), function(x){
-  ggplot(melted_cormat_neg[[x]], aes(x=value)) + geom_density() + 
-    xlab("correlation") + ggtitle(gsub("hao_2020\\.", "", x))
-})
-patchwork::wrap_plots(plts, ncol = 2)
+<!-- ```{r} -->
 
-```
+<!-- col_fun = colorRamp2(c(-1, 0, 1), c("blue", "white", "red")) -->
+<!-- # Heatmap(cor_res$hao_2020.counts, col = col_fun, column_title = "mat1",  -->
+<!-- #         show_row_names = FALSE, show_column_names = FALSE) -->
+
+<!-- grid.newpage() -->
+<!-- pushViewport(viewport(layout = grid.layout(nr = 2, nc = 2))) -->
+
+<!-- pushViewport(viewport(layout.pos.row = 1, layout.pos.col = 1)) -->
+<!-- draw(Heatmap(cor_res$hao_2020.counts, col = col_fun, column_title = "raw counts",  -->
+<!--              show_heatmap_legend = TRUE, show_row_names = FALSE, show_column_names = FALSE), newpage = FALSE) -->
+<!-- upViewport() -->
+
+<!-- pushViewport(viewport(layout.pos.row = 1, layout.pos.col = 2)) -->
+<!-- draw(Heatmap(cor_res$hao_2020.logcounts, col = col_fun, column_title = "logCounts", show_heatmap_legend = TRUE, show_row_names = FALSE, show_column_names = FALSE), newpage = FALSE) -->
+<!-- upViewport() -->
+
+<!-- pushViewport(viewport(layout.pos.row = 2, layout.pos.col = 1)) -->
+<!-- draw(Heatmap(cor_res$hao_2020.clr_adts, col = col_fun, column_title = "CLR-ADTs", show_heatmap_legend = TRUE, show_row_names = FALSE, show_column_names = FALSE), newpage = FALSE) -->
+<!-- upViewport() -->
+
+<!-- pushViewport(viewport(layout.pos.row = 2, layout.pos.col = 2)) -->
+<!-- draw(Heatmap(cor_res$hao_2020.clr_cells, col = col_fun, column_title = "CLR-cells", show_heatmap_legend = TRUE, show_row_names = FALSE, show_column_names = FALSE), newpage = FALSE) -->
+<!-- upViewport() -->
+
+<!-- ``` -->
+
+
+<!-- ```{r} -->
+<!-- # Density curve -->
+<!-- plts <- lapply(grep("hao", names(melted_cormat), value = TRUE), function(x){ -->
+<!--   ggplot(melted_cormat[[x]], aes(x=value)) + geom_density() +  -->
+<!--     xlab("correlation") + ggtitle(gsub("hao_2020\\.", "", x)) -->
+<!-- }) -->
+<!-- patchwork::wrap_plots(plts, ncol = 2) -->
+
+<!-- ``` -->
+
+<!-- **Raw counts** have the highest protein-protein correlation! Could be used in the PICS score ?  -->
+
+
+<!-- ### **Positive** protein - protein correlation  -->
+
+<!-- ```{r} -->
+
+<!-- grid.newpage() -->
+<!-- pushViewport(viewport(layout = grid.layout(nr = 2, nc = 2))) -->
+
+<!-- pushViewport(viewport(layout.pos.row = 1, layout.pos.col = 1)) -->
+<!-- draw(Heatmap(cor_pos$hao_2020.counts, col = col_fun, column_title = "raw counts",  -->
+<!--              show_heatmap_legend = TRUE, show_row_names = FALSE, show_column_names = FALSE), newpage = FALSE) -->
+<!-- upViewport() -->
+
+<!-- pushViewport(viewport(layout.pos.row = 1, layout.pos.col = 2)) -->
+<!-- draw(Heatmap(cor_pos$hao_2020.logcounts, col = col_fun, column_title = "logCounts", show_heatmap_legend = TRUE, show_row_names = FALSE, show_column_names = FALSE), newpage = FALSE) -->
+<!-- upViewport() -->
+
+<!-- pushViewport(viewport(layout.pos.row = 2, layout.pos.col = 1)) -->
+<!-- draw(Heatmap(cor_pos$hao_2020.clr_adts, col = col_fun, column_title = "CLR-ADTs", show_heatmap_legend = TRUE, show_row_names = FALSE, show_column_names = FALSE), newpage = FALSE) -->
+<!-- upViewport() -->
+
+<!-- pushViewport(viewport(layout.pos.row = 2, layout.pos.col = 2)) -->
+<!-- draw(Heatmap(cor_pos$hao_2020.clr_cells, col = col_fun, column_title = "CLR-cells", show_heatmap_legend = TRUE, show_row_names = FALSE, show_column_names = FALSE), newpage = FALSE) -->
+<!-- upViewport() -->
+
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- # Density curve -->
+<!-- plts <- lapply(grep("hao", names(melted_cormat_pos), value = TRUE), function(x){ -->
+<!--   ggplot(melted_cormat_pos[[x]], aes(x=value)) + geom_density() +  -->
+<!--     xlab("correlation") + ggtitle(gsub("hao_2020\\.", "", x)) -->
+<!-- }) -->
+<!-- patchwork::wrap_plots(plts, ncol = 2) -->
+
+<!-- ``` -->
+
+
+
+<!-- ### **Negative** protein - protein correlation  -->
+
+<!-- ```{r} -->
+
+<!-- grid.newpage() -->
+<!-- pushViewport(viewport(layout = grid.layout(nr = 2, nc = 2))) -->
+
+<!-- pushViewport(viewport(layout.pos.row = 1, layout.pos.col = 1)) -->
+<!-- draw(Heatmap(cor_neg$hao_2020.counts, col = col_fun, column_title = "raw counts",  -->
+<!--              show_heatmap_legend = TRUE, show_row_names = FALSE, show_column_names = FALSE), newpage = FALSE) -->
+<!-- upViewport() -->
+
+<!-- pushViewport(viewport(layout.pos.row = 1, layout.pos.col = 2)) -->
+<!-- draw(Heatmap(cor_neg$hao_2020.logcounts, col = col_fun, column_title = "logCounts", show_heatmap_legend = TRUE, show_row_names = FALSE, show_column_names = FALSE), newpage = FALSE) -->
+<!-- upViewport() -->
+
+<!-- pushViewport(viewport(layout.pos.row = 2, layout.pos.col = 1)) -->
+<!-- draw(Heatmap(cor_neg$hao_2020.clr_adts, col = col_fun, column_title = "CLR-ADTs", show_heatmap_legend = TRUE, show_row_names = FALSE, show_column_names = FALSE), newpage = FALSE) -->
+<!-- upViewport() -->
+
+<!-- pushViewport(viewport(layout.pos.row = 2, layout.pos.col = 2)) -->
+<!-- draw(Heatmap(cor_neg$hao_2020.clr_cells, col = col_fun, column_title = "CLR-cells", show_heatmap_legend = TRUE, show_row_names = FALSE, show_column_names = FALSE), newpage = FALSE) -->
+<!-- upViewport() -->
+
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- # Density curve -->
+<!-- plts <- lapply(grep("hao", names(melted_cormat_neg), value = TRUE), function(x){ -->
+<!--   ggplot(melted_cormat_neg[[x]], aes(x=value)) + geom_density() +  -->
+<!--     xlab("correlation") + ggtitle(gsub("hao_2020\\.", "", x)) -->
+<!-- }) -->
+<!-- patchwork::wrap_plots(plts, ncol = 2) -->
+
+<!-- ``` -->
 ## Z-score calculation
 
 Z-score transformation of positive and negative components. This method standardizes each sub-score individually and then combines them with equal weights. **Steps:**

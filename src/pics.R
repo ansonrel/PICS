@@ -45,17 +45,32 @@ save_sce <- function(x, output_sce, clustmethod) {
 
 # functions used to calculate the normalization score based on negative and 
 # positive control signals
+# neg_fun can only be of 
+# - KS : KS test alone
+# - KS_sd: KS test weighted by sd
+# - med_sd : median weighted by sd <--- default 
 
-get_negScore <- function(d, ks_neg = FALSE) {
+get_negScore <- function(d, neg_fun = FALSE) {
+  
+  # check for neg_fun arg
+  accept_arg <- c("KS", "KS_sd", "med_sd")
+  if (!neg_fun %in% accept_arg){
+    stop(paste0("`neg_fun` should be of: ", paste(accept_arg, collapse = ",")))
+  }
+  
   # Shift values toward zero
   d <- d - min(d)
   # Scale so that distribution is between 0 and 1
-  d <- d/max(d)
+  if (!max(d) == 0){
+    d <- d/max(d)
+  }
   
   
-  if(ks_neg){
-    return( 1/(ks.test(d, y = "pnorm", 0, alternative = "two.sided")$statistic))
-  } else {
+  if(neg_fun == "KS"){
+    return( 1/(ks.test(d, y = "pnorm", 0, alternative = "two.sided")$statistic + .1))
+  } else if (neg_fun == "KS_sd"){
+    return( 1/(ks.test(d, y = "pnorm", 0, alternative = "two.sided")$statistic * sd(d) + .1))
+  } else if (neg_fun == "med_sd"){
     # Returns 10 if median or sd is 0
     return( 1/(abs(median(d)) * sd(d) + .1) )
   }
@@ -68,8 +83,12 @@ get_posScore <- function(d_neg, d_pos, ks_pos = FALSE) {
   d_pos <- d_pos - min(d_pos)
   
   # Scale so that both distributions are between 0 and 1
-  d_neg <- d_neg/max(d_neg)
-  d_pos <- d_pos/max(d_pos)
+  if (!max(d_neg) == 0){
+    d_neg <- d_neg/max(d_neg)
+  }
+  if (!max(d_pos) == 0){
+    d_pos <- d_pos/max(d_pos)
+  }
   
   # Compare
   sd_neg <- sd(d_neg)
@@ -79,7 +98,8 @@ get_posScore <- function(d_neg, d_pos, ks_pos = FALSE) {
     res <- ks.test(d_neg, d_pos)
     #message("Using KS")
   } else {
-    res <- t.test(d_neg, d_pos, sigma.x=sd_neg, sigma.y=sd_pos, alternative="two.sided") 
+    res <- t.test(d_neg, d_pos, sigma.x=sd_neg, sigma.y=sd_pos, 
+                  alternative="two.sided", paired = TRUE) 
   }
   
   #would make more sens to use "greater" but the results don't change so not sure what's up
@@ -88,7 +108,7 @@ get_posScore <- function(d_neg, d_pos, ks_pos = FALSE) {
 }
 
 get_normScore <- function(d_neg, d_pos, ks_pos = FALSE, positive_only = FALSE, 
-                          ks_neg = ks_neg, negative_only = FALSE) {
+                          neg_fun = neg_fun, negative_only = FALSE) {
   assertthat::not_empty(d_neg)
   assertthat::not_empty(d_pos)
   
@@ -97,13 +117,13 @@ get_normScore <- function(d_neg, d_pos, ks_pos = FALSE, positive_only = FALSE,
   
   if (is.null(dim(d_neg)) & is.null(dim(d_pos))) {
     # both object only have a single element
-    negScore <- get_negScore(d_neg, ks_neg = ks_neg)
+    negScore <- get_negScore(d_neg, neg_fun = neg_fun)
     posScore <- get_posScore(d_neg, d_pos, ks_pos = ks_pos)
     
     
   } else if (is.null(dim(d_neg))) {
     # there is only one isotype
-    negScore <- get_negScore(d_neg, ks_neg = ks_neg)
+    negScore <- get_negScore(d_neg, neg_fun = neg_fun)
     
     posScore.list <- lapply(d_pos, function(x) {
       get_posScore(d_neg, x, ks_pos = ks_pos)
@@ -114,7 +134,7 @@ get_normScore <- function(d_neg, d_pos, ks_pos = FALSE, positive_only = FALSE,
   } else if (is.null(dim(d_pos))) {
     # there is only one positive control
     negScore.list <- lapply(rownames(d_neg), function(x) {
-      get_negScore(d_neg[x,], ks_neg = ks_neg)
+      get_negScore(d_neg[x,], neg_fun = neg_fun)
     })
     
     posScore.list <- lapply(d_neg, function(x) {
@@ -130,7 +150,7 @@ get_normScore <- function(d_neg, d_pos, ks_pos = FALSE, positive_only = FALSE,
     comb <- expand.grid(1:dim(d_neg)[1], 1:dim(d_pos)[1])
     
     negScore.list <- lapply(rownames(d_neg), function(x) {
-      get_negScore(d_neg[x,], ks_neg = ks_neg)
+      get_negScore(d_neg[x,], neg_fun = neg_fun)
     })
     
     posScore.list <- apply(comb, MARGIN = 1, FUN=function(x) {
@@ -156,7 +176,7 @@ get_normScore <- function(d_neg, d_pos, ks_pos = FALSE, positive_only = FALSE,
 
 # function used to save negative and positive controls to later assess the
 # performance of normalization
-saveControlScore <- function(x, ks_pos = FALSE, ks_neg = FALSE) {
+saveControlScore <- function(x, ks_pos = FALSE, neg_fun = "med_sd") {
   
   score <- 0 
   #if the dataset has both isotypes and positive controls, score returned 
@@ -176,7 +196,7 @@ saveControlScore <- function(x, ks_pos = FALSE, ks_neg = FALSE) {
     iso <- assays(x)[[asa]][names_iso,]
     pos <- assays(x)[[asa]][names_pos,]
     
-    score <- get_normScore(iso, pos, ks_pos = ks_pos, ks_neg = ks_neg) 
+    score <- get_normScore(iso, pos, ks_pos = ks_pos, neg_fun = neg_fun) 
     
     control.list <- list("name"=x@metadata$name, "method"=asa, "score"=score)
     
@@ -188,7 +208,7 @@ saveControlScore <- function(x, ks_pos = FALSE, ks_neg = FALSE) {
   return(score)
 }
 
-picsScore <- function(x, assaynam = NULL, ks_pos = FALSE, ks_neg = FALSE,
+picsScore <- function(x, assaynam = NULL, ks_pos = FALSE, neg_fun = "med_sd",
                       positive_only = FALSE, negative_only = FALSE) {
   
   if(is.null(assaynam)){
@@ -215,7 +235,7 @@ picsScore <- function(x, assaynam = NULL, ks_pos = FALSE, ks_neg = FALSE,
     iso <- assays(x)[[asa]][names_iso,]
     pos <- assays(x)[[asa]][names_pos,]
     
-    score <- get_normScore(iso, pos, ks_pos = ks_pos, ks_neg = ks_neg,
+    score <- get_normScore(iso, pos, ks_pos = ks_pos, neg_fun = neg_fun,
                            positive_only = positive_only, 
                            negative_only = negative_only) 
     

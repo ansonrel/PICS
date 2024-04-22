@@ -1,0 +1,341 @@
+---
+title: "Testing and spot checks for PICS"
+author: "Anthony Sonrel"
+date: "`r Sys.Date()`"
+output: 
+  html_document: 
+    toc: yes
+    toc_float: yes
+    theme: yeti
+    highlight: tango
+    code_folding: hide
+    keep_md: no
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(bitmapType="cairo") 
+```
+
+## Load necessary libraries
+
+```{r}
+suppressPackageStartupMessages({
+# library(pipeComp)
+  library(ggplot2)
+  library(SingleCellExperiment)
+  library(tidyr)
+  library(tidyverse)
+  library(gridExtra)
+  library(patchwork)
+  library(cowplot)
+  library(reshape2)
+  library(rlist)
+  library(fBasics)
+  library(plotROC)
+  library(ComplexHeatmap)
+  library(circlize)
+  library(ggrepel)
+
+})
+source("../src/pics.R")
+source("../src/norm.R")
+source("../src/signed-ks-test/signed-ks-test.R")
+## Subsample ? Mainly for interactive
+if (interactive()) SUBSAMPLING = 1000 else SUBSAMPLING = FALSE
+```
+
+
+The initial PICS score idea: 
+
+```{r pressure, echo=FALSE, fig.cap="A caption", out.width = '100%'}
+knitr::include_graphics("img/pics_schema2.png")
+```
+
+
+## Load data
+
+```{r}
+dat <- list.files("../data", full.names = TRUE)
+dat <- lapply(dat, function(x) readRDS(paste0(x, "/d.rds")))
+names(dat) <- list.files("../data/")
+# only take the ADT as main sce
+dat <- lapply(dat, function(x) altExp(x))
+if(SUBSAMPLING != FALSE){
+  dat <- lapply(dat, function(x){
+    set.seed(1234)
+    x[ ,sample(ncol(x), SUBSAMPLING)]
+  })
+}
+dat
+```
+
+
+```{r}
+# lapply(dat, function(x) rownames(x))
+```
+
+```{r}
+# keeping only hao & kotliarov, whcih have isotypes
+dat <- list(dat[["hao_2020"]], dat[["kotliarov_2020"]])
+names(dat) <- c("hao_2020", "kotliarov_2020")
+
+```
+
+```{r}
+dat[[2]]$phenoid[dat[[2]]$phenoid == "C0"] <- "CD4+ naive T"
+dat[[2]]$phenoid[dat[[2]]$phenoid == "C1"] <- "CD4+ memory"
+dat[[2]]$phenoid[dat[[2]]$phenoid == "C2"] <- "monocytes and mDC"
+dat[[2]]$phenoid[dat[[2]]$phenoid == "C3"] <- "B cells"
+dat[[2]]$phenoid[dat[[2]]$phenoid == "C4"] <- "CD8+"
+dat[[2]]$phenoid[dat[[2]]$phenoid == "C5"] <- "NK"
+dat[[2]]$phenoid[dat[[2]]$phenoid == "C6"] <- "CD8+ naive T"
+dat[[2]]$phenoid[dat[[2]]$phenoid == "C7"] <- "unconventional T"
+dat[[2]]$phenoid[dat[[2]]$phenoid == "C8"] <- "non-classical monocytes"
+dat[[2]]$phenoid[dat[[2]]$phenoid == "C9"] <- "pDC"
+```
+
+Datasets with both isotypes and positive controls, used in this report: 
+
+```{r}
+tabledat <- data.frame(
+  # "Dataset" = names(dat), 
+  "N cells" = unlist(lapply(dat, ncol)), 
+  "N ADTs" = unlist(lapply(dat, nrow)),
+  "N isotypes" = unlist(lapply(dat, function(x) sum(rowData(x)$is.isotype))), 
+  "N positives" = unlist(lapply(dat, function(x) sum(rowData(x)$is.posControl))), 
+  "N cell types lvl 0" = unlist(lapply(dat, function(x) length(unique(x$phenoid)))), 
+  "N cell types lvl 1" = unlist(lapply(dat, function(x) length(unique(x$phenoid2)))), 
+  "N cell types lvl 2" = unlist(lapply(dat, function(x) length(unique(x$phenoid3)))) 
+)
+knitr::kable(t(tabledat))
+```
+Positive and negative markers in each dataset, as defined by the authors of the studies: 
+
+```{r}
+print("isotypes:")
+(neg <- lapply(dat, function(x){
+  rownames(rowData(x)[rowData(x)$is.isotype == TRUE, ])
+}))
+
+
+print("positive controls:")
+(pos <- lapply(dat, function(x){
+  rownames(rowData(x)[rowData(x)$is.posControl == TRUE, ])
+}))
+
+
+```
+
+## Preprocessing
+
+Normalization methods used: 
+
+- log normalized counts (`logNormCounts`)
+
+- centered-log ratio (CLR) ADT-wise
+
+- centered-log ratio (CLR) cell-wise
+
+```{r}
+dat <- lapply(dat, function(x){
+  x <- logNormCounts(x)
+  logcounts(x) <- assay(x, "logNormCounts")
+  x <- clr.seurat_adts(x)
+  x <- clr.seurat_cells(x)
+  assay(x, "logNormCounts") <- NULL
+  x
+})
+dat
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## Kirmonov-smirnov test 
+
+### Sample size
+
+Let's spot check if increased sample size leads to increased KS tes stats: 
+
+```{r}
+sample_size <- rep(c(10, 100, 200, 500, 1000, 5000), 100)
+ks_stat <- lapply(sample_size, function(x){
+  xs <- rnorm(n = x, mean = 10, sd = 1)
+  ys <- rnorm(n = x, mean = 11, sd = 1) 
+  ks_x <- ks.test(xs,ys)$statistic
+})
+boxplot(unlist(ks_stat) ~ sample_size)
+
+```
+
+--> KS test is invariant of the sample size, at least for rather large values
+
+
+### Recognize Isotype > Positive control 
+
+
+
+
+```{r}
+df_neg <- abs(rnorm(1000, mean = 1, sd = 1))
+df_pos <-  abs(rnorm(1000, mean = 4, sd = 1))
+df <- data.frame(value = c(df_neg, df_pos), status = rep(c(1, 0), each = 1000))
+
+ggplot(df[df$status == 0, ], aes(x=value)) + 
+            geom_histogram(data=subset(df, status == 1), fill = "#38761D", alpha = 0.5)  +
+            geom_histogram(data=subset(df, status == 0), fill = "#990000", alpha = 0.5) 
+```
+
+
+
+
+Normal KS test: 
+
+```{r}
+ks.test(x = df$value[df$status == 0], y = df$value[df$status == 1], alternative = "less")
+
+```
+
+```{r}
+ks.test(x = df$value[df$status == 0], y =  df$value[df$status == 1])
+
+```
+==> No difference between 'less' and 'two.sided' test
+
+
+**Signed KS test**: 
+
+An implementation has been proposed here, which removes the absolute function in the delta maximum calculation: 
+
+https://github.com/franapoli/signed-ks-test
+
+
+
+```{r}
+ks.test.2(x = df$value[df$status == 0], y = df$value[df$status == 1])$ES
+
+```
+
+
+
+```{r}
+ks.test.2(y = df$value[df$status == 0], x =  df$value[df$status == 1])$ES
+
+```
+
+
+**CAUTION** The following paper pinpoints a problem of false positives (and irrevelance of signed KS test), if the 2 distributions are very similar but have different variance. The maximum difference can then happen at either tail of the cdf and the sign can be driven by stochastic. 
+
+https://gigascience.biomedcentral.com/articles/10.1186/s13742-015-0048-7
+
+
+```{r warning=FALSE}
+
+## draw N pairs of Distributions with same mean but differences of variance
+## --> see the distribution of D
+## do the same with N pairs of distribution with same caracteristics, but bigger ~single cell size
+sample_size <- rep(c(100,1000, 10000), 100)
+set.seed(1234)
+ks_stat <- lapply(sample_size, function(x){
+  xs <- rnorm(n = x, mean = 10, sd = 1)
+  ys <- rnorm(n = x, mean = 10, sd = 3) 
+  ks_x <- ks.test.2(xs,ys)$ES
+})
+boxplot(unlist(ks_stat) ~ sample_size)
+
+```
+
+
+```{r}
+hist(unlist(ks_stat), breaks = 40)
+```
+
+**Solution** None, it is still an open problem. The authors of the paper recommend the use of t-test or its non-parametric version (Shapiro) but it doesn't fit entirely the needs of the PICS score. 
+
+--> Warn the users and highlight the problem that for some combinations of markers, we may have this scenario. If we enforce the AUC filtering, then we can also assume that these scenarios will be filtered out. 
+
+
+TODO:  auc filter for higher mean (1st case), higher variance( second case), mixted case
+
+### AUC filtering 
+
+ROC curve of an example where isotype >> positive 
+
+```{r}
+rocplot <-  ggplot(df, aes(d = status, m = value)) + geom_roc()+ style_roc() 
+ggplot(df[df$status == 0, ], aes(x=value)) + 
+            geom_histogram(data=subset(df, status == 1), fill = "#38761D", alpha = 0.5)  +
+            geom_histogram(data=subset(df, status == 0), fill = "#990000", alpha = 0.5) +
+    ggplot(df, aes(d = status, m = value)) + geom_roc()+ style_roc() 
+(auc_temp <- round(calc_auc(rocplot)$AUC, 2))
+
+```
+
+Let's see the effect of AUC filtering on abnormal situations: 
+- Higher isotype expression
+- Same mean expression between isotype and positive, but with different variance ('split KS stats' situation)
+- Mixed case from the 2 above 
+
+**Higher isotype expression**
+
+```{r}
+
+nsize = 1000
+ks_stat <- lapply(1:100, function(x){
+  df_temp <- data.frame(value = c(abs(rnorm(n = nsize, mean = 1, sd = 1)),
+                                  abs(rnorm(n = nsize, mean = 2, sd = 1)) ), 
+                        status = rep(c(1,0), each =nsize)) 
+  rocplot <-  ggplot(df_temp, aes(d = status, m = value)) + geom_roc()+ style_roc() 
+  round(calc_auc(rocplot)$AUC, 3)
+})
+boxplot(unlist(ks_stat), main = "AUC - simulated cases with greater isotype expressions")
+
+```
+
+**Same mean, different variance**
+
+```{r}
+
+nsize = 1000
+ks_stat <- lapply(1:100, function(x){
+  df_temp <- data.frame(value = c(abs(rnorm(n = nsize, mean = 1, sd = 1)),
+                                  abs(rnorm(n = nsize, mean = 1, sd = 3)) ), 
+                        status = rep(c(1,0), each =nsize)) 
+  rocplot <-  ggplot(df_temp, aes(d = status, m = value)) + geom_roc()+ style_roc() 
+  round(calc_auc(rocplot)$AUC, 3)
+})
+boxplot(unlist(ks_stat), main = "AUC - simulated cases with same mean & different variances")
+
+```
+
+
+**Higher positive mean**
+
+```{r}
+
+nsize = 1000
+ks_stat <- lapply(1:100, function(x){
+  df_temp <- data.frame(value = c(abs(rnorm(n = nsize, mean = 3, sd = 1)),
+                                  abs(rnorm(n = nsize, mean = 1, sd = 1)) ), 
+                        status = rep(c(1,0), each =nsize)) 
+  rocplot <-  ggplot(df_temp, aes(d = status, m = value)) + geom_roc()+ style_roc() 
+  round(calc_auc(rocplot)$AUC, 3)
+})
+boxplot(unlist(ks_stat), main = "AUC - simulated cases with higher positive mean")
+
+```
+
+
+
+
