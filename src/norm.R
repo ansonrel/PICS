@@ -79,6 +79,7 @@ scaledata.seurat <- function(xlist, margin = 2, center = TRUE, scale = TRUE,
                                 counts = "counts",
                                 data = NULL,
                                 assay = "ADT")
+
   
   d.seurat <- Seurat::NormalizeData(d.seurat, verbose = FALSE, 
                                     normalization.method = "CLR", 

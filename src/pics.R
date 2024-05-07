@@ -4,25 +4,27 @@ get_markers <- function(x) {
   if (any(names(rowData(x)) == "is.isotype")) {
     # Select out the isotypes
     markers <- rownames(x)[!rowData(x)$is.isotype] 
+  } else {
+    markers <- rownames(x)
   }
   
   return(markers)
 }
 
-# function used to get the name of the normalization method used
-get_assay <- function(x) {
-  
-  known_assays <- c("clr_adts", "clr_cells", "scaleData", "dsb", "logNormCounts")
-  found_assay <- names(assays(x)) %in% known_assays
-  
-  if( any(found_assay) ) {
-    asa <- names(assays(x))[found_assay]
-  } else {
-    stop("No assay found")
-  }
-  
-  return(asa)
-}
+# # function used to get the name of the normalization method used
+# get_assay <- function(x) {
+#   
+#   known_assays <- c("clr_adts", "clr_cells", "scaleData", "dsb", "logNormCounts")
+#   found_assay <- names(assays(x)) %in% known_assays
+#   
+#   if( any(found_assay) ) {
+#     asa <- names(assays(x))[found_assay]
+#   } else {
+#     stop("No assay found")
+#   }
+#   
+#   return(asa)
+# }
 
 # function used to save sce after normalization for low dimensionality check
 save_sce <- function(x, output_sce, clustmethod) {
@@ -137,7 +139,8 @@ get_normScore <- function(d_neg, d_pos, ks_pos = FALSE, positive_only = FALSE,
       get_negScore(d_neg[x,], neg_fun = neg_fun)
     })
     
-    posScore.list <- lapply(d_neg, function(x) {
+    posScore.list <- apply(d_neg, 1, function(x) {
+      
       get_posScore(x, d_pos, ks_pos = ks_pos)
     })
     
@@ -182,13 +185,19 @@ saveControlScore <- function(x, ks_pos = FALSE, neg_fun = "med_sd") {
   #if the dataset has both isotypes and positive controls, score returned 
   # should be larger than 0
   
-  if (!any(names(rowData(x)) == "is.isotype") | all(!rowData(x)$is.isotype)) {
+    
+    
+  
+  if (!any(names(rowData(x)) == "is.isotype") ) {
+    print(paste("Warning: No isotypes are available in", x@metadata$name, "\n the evaluation of negative and positive controls separation is skipped"))
+  } else if ( all(!rowData(x)$is.isotype) ) {
     print(paste("Warning: No isotypes are available in", x@metadata$name, "\n the evaluation of negative and positive controls separation is skipped"))
   } else if (!any(names(rowData(x)) == "is.posControl") | all(!rowData(x)$is.posControl)) {
     print(paste("Warning: No ipositive controls are available in", x@metadata$name, "\n the evaluation of negative and positive controls separation is skipped"))
-  } else {
+  }  else {
     
-    asa <- get_assay(x)
+    # asa <- get_assay(x)
+    asa <- assayNames(x)[length(assayNames(x))]
     
     names_iso <- rownames(x)[rowData(x)$is.isotype]
     names_pos <- rownames(x)[rowData(x)$is.posControl]
@@ -212,7 +221,8 @@ picsScore <- function(x, assaynam = NULL, ks_pos = FALSE, neg_fun = "med_sd",
                       positive_only = FALSE, negative_only = FALSE) {
   
   if(is.null(assaynam)){
-    asa <- get_assay(x)
+    # asa <- get_assay(x)
+    asa <- assayNames(x)[length(assayNames(x))]
   } else {
     asa <- assaynam
   }
@@ -223,11 +233,13 @@ picsScore <- function(x, assaynam = NULL, ks_pos = FALSE, neg_fun = "med_sd",
   #if the dataset has both isotypes and positive controls, score returned 
   # should be larger than 0
   
-  if (!any(names(rowData(x)) == "is.isotype") | all(!rowData(x)$is.isotype)) {
-    cat(paste("\n Warning: No isotypes available in \t", x@metadata$name, "\n PICS score computation skipped \n"))
-  } else if (!any(names(rowData(x)) == "is.posControl") | all(!rowData(x)$is.posControl)) {
-    cat(paste("\n Warning: No positive controls available in \t", x@metadata$name, "\n PICS score computation skipped \n"))
-  } else {
+    if (!any(names(rowData(x)) == "is.isotype") ) {
+      print(paste("Warning: No isotypes are available in", x@metadata$name, "\n PICS score computation skipped \n"))
+    } else if ( all(!rowData(x)$is.isotype) ) {
+      print(paste("Warning: No isotypes are available in", x@metadata$name, "\n  PICS score computation skipped \n"))
+    } else if (!any(names(rowData(x)) == "is.posControl") | all(!rowData(x)$is.posControl)) {
+      cat(paste("\n Warning: No positive controls available in \t", x@metadata$name, "\n PICS score computation skipped \n"))
+    }  else {
     
     names_iso <- rownames(x)[rowData(x)$is.isotype]
     names_pos <- rownames(x)[rowData(x)$is.posControl]
