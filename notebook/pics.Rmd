@@ -761,6 +761,9 @@ ggplot(corr_auc.pics, aes(negative_score, correlation, colour = factor(normaliza
   geom_point(size = 3) + xlab("negative score\nstrategy") + labs(color='Normalization') 
 
 ```
+
+
+
 ```{r}
 # Calculate correlation between X and Y for all combinations of A and B
 corr_auc.pics <- melt_auc %>%
