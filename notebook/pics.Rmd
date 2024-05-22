@@ -174,6 +174,22 @@ print("positive controls:")
 
 ```
 
+Antibody metadata
+
+```{r}
+abs_kot <- read_csv("../data/kotliarov_2020/abs_metadata.csv")
+abs_hao <- read_csv("../data/hao_2020/abs_metadata.csv")
+
+abs_kot <- data.frame("antibody.clone" = abs_kot$Clone, 
+                      "target" = abs_kot$Specificity, 
+                      "dataset" = "Kotliarov")
+abs_hao <- data.frame("antibody.clone" = abs_hao$`Antibody Clone`, 
+                      "target" = abs_hao$Target, 
+                      "dataset" = "Hao")
+abs_metadata <- rbind(abs_kot, abs_hao)
+head(abs_metadata)
+```
+
 ## Preprocessing
 
 Normalization methods used: 
@@ -430,7 +446,7 @@ geom_point() + geom_smooth(se = FALSE) + ggtitle("Positive vs Negative PICS scor
   xlab("PICS positive component") + ylab("PICS negative component")
 ```
 
-**==> PICS neg using ks is not very good at differenciating signals** 
+**==> PICS neg using ks is not very good at differentiating signals** 
 
 
 Checking the plateau of PICS negative at ~1.67. 
@@ -470,6 +486,46 @@ boxplot(d2, main = paste0("One sample KS stat: ", ks.test(d2, y = "pnorm", 0, al
 
 ```
 
+
+### PICS score with KS stat for positive & **negative components, weighted by sd**
+
+```{r, message=FALSE, warning=FALSE}
+out_scores <- list()
+      
+norm_nam <- assayNames(datsub)
+      
+for (ASSAY in norm_nam){
+  for (i in names(dat)){
+    for (j in neg[[i]]){
+      for (k in pos[[i]]){
+        
+        datsub <- dat[[i]][c(j, k)]
+        picspos <- round(picsScore(datsub, ASSAY, ks_pos = TRUE, neg_fun = "KS_sd", positive_only = TRUE), 3)
+        picsneg <- round(picsScore(datsub, ASSAY, ks_pos = TRUE, neg_fun = "KS_sd", negative_only = TRUE), 3)
+        out_scores[[ASSAY]][[paste(i, j, k, sep = ",")]] <- list(picspos, picsneg)
+
+      }
+    }
+  }
+}
+
+```
+
+```{r}
+
+pics_melt <- lapply(names(out_scores), function(x){
+  data.frame("PICS.pos" = unlist(lapply(out_scores[[x]], `[[`, 1)), 
+             "PICS.neg" = unlist(lapply(out_scores[[x]], `[[`, 2)), 
+             "normalization" = x)
+})
+
+
+pics_melt <- do.call(rbind, pics_melt)
+
+ggplot(pics_melt, aes(x=PICS.pos, y=PICS.neg, col = normalization)) + 
+geom_point() + geom_smooth(se = FALSE) + ggtitle("Positive vs Negative PICS score component\nKS test in positive & negative components (weighted by SD)") + 
+  xlab("PICS positive component") + ylab("PICS negative component")
+```
 
 
 ## ROC curve {.tabset}
@@ -521,12 +577,24 @@ for (i in names(dat)){
               datroc <- data.frame(exprs = c(neg_i, pos_i), 
                      status = labels)
               
-              ## calculate PICS scores
-              picspos <- round(picsScore(datsub, l, ks_pos = TRUE, neg_fun = "KS", positive_only = TRUE), 3)
-              picsneg <- round(picsScore(datsub, l, ks_pos = TRUE, neg_fun = "med_sd", negative_only = TRUE), 3)
-              picsglob <- round(picsScore(datsub, l, ks_pos = TRUE, neg_fun = "med_sd"), 3)
-              out_scores[[l]][[paste(i, j, k, sep = ",")]] <- list(picspos, picsneg)
-
+              ## calculate PICS scores with 3 variants
+              ## neg_fun = "KS", "med_sd" or "KS_sd"
+              PICS.ks.pos <- round(picsScore(datsub, l, ks_pos = TRUE, neg_fun = "KS", positive_only = TRUE), 3)
+              PICS.ks.neg <- round(picsScore(datsub, l, ks_pos = TRUE, neg_fun = "KS", negative_only = TRUE), 3)
+              PICS.ks.glob <- round(picsScore(datsub, l, ks_pos = TRUE, neg_fun = "KS"), 3)
+              PICS.med_sd.pos <- round(picsScore(datsub, l, ks_pos = TRUE, 
+                                                 neg_fun = "med_sd", positive_only = TRUE), 3)
+              PICS.med_sd.neg <- round(picsScore(datsub, l, ks_pos = TRUE, 
+                                                 neg_fun = "med_sd", negative_only = TRUE), 3)
+              PICS.med_sd.glob <- round(picsScore(datsub, l, ks_pos = TRUE, 
+                                                  neg_fun = "med_sd"), 3)
+              PICS.KS_sd.pos <- round(picsScore(datsub, l, ks_pos = TRUE, 
+                                                neg_fun = "KS_sd", positive_only = TRUE), 3)
+              PICS.KS_sd.neg <- round(picsScore(datsub, l, ks_pos = TRUE, 
+                                                neg_fun = "KS_sd", negative_only = TRUE), 3)
+              PICS.KS_sd.glob <- round(picsScore(datsub, l, ks_pos = TRUE, 
+                                                 neg_fun = "KS_sd"), 3)
+              
               ## plot roc and extract auc score from it
               rocplot <-  ggplot(datroc, aes(d = status, m = exprs)) + geom_roc()+ style_roc() + 
                 ggtitle(paste0("ROC curve - ", k, " vs ", j, " \n",i, " dataset" ))
@@ -543,9 +611,15 @@ for (i in names(dat)){
               ## stores roc score and metadata in table for this iter
               out_auc <- rbind(out_auc, 
                                       data.frame(AUC = auc_temp, 
-                                                 PICS.ks = picsglob, 
-                                                 PICS.ks.pos = picspos, 
-                                                 PICS.ks.neg = picsneg,
+                                                 PICS.ks.glob = PICS.ks.glob, 
+                                                 PICS.ks.pos = PICS.ks.pos, 
+                                                 PICS.ks.neg = PICS.ks.neg,
+                                                 PICS.med_sd.pos = PICS.med_sd.pos, 
+                                                 PICS.med_sd.neg = PICS.med_sd.neg, 
+                                                 PICS.med_sd.glob = PICS.med_sd.glob, 
+                                                 PICS.KS_sd.pos = PICS.KS_sd.pos, 
+                                                 PICS.KS_sd.neg = PICS.KS_sd.neg, 
+                                                 PICS.KS_sd.glob = PICS.KS_sd.glob, 
                                                  normalization = l, 
                                                  positive.marker = k, 
                                                  negative.marker = j, 
@@ -554,6 +628,9 @@ for (i in names(dat)){
     }
   }
 }
+
+## pairs of markers
+out_auc$pair <- paste( out_auc$positive.marker, out_auc$negative.marker, out_auc$ds)
 
 ```
 
@@ -566,11 +643,12 @@ for (i in 1:length(out_roc)) {
 }
 ```
 
-### Summary plots
 
+
+
+## AUC Summary plots
 
 ```{r, fig.height=5, fig.width=8}
-library(ggplot2)
 
 # Assuming your dataframe is named 'df' with numerical column 'num_col' and categorical column 'cat_col'
 ggplot(out_auc, aes(x = normalization, y = AUC, color = normalization)) +
@@ -582,16 +660,16 @@ ggplot(out_auc, aes(x = normalization, y = AUC, color = normalization)) +
 Are top scores in one method also top for other methods ? 
 
 ```{r}
-out_auc$pair <- paste( out_auc$positive.marker, out_auc$negative.marker, out_auc$ds)
+
 ggplot(out_auc, aes(x = normalization, y = AUC, color = normalization)) +
   geom_violin() + ggtitle("Effect of **normalization method** on AUC") + 
   geom_line(aes(group=pair))
+
 ```
 
 
 
 ```{r, fig.height=5, fig.width=8}
-library(ggplot2)
 
 # Assuming your dataframe is named 'df' with numerical column 'num_col' and categorical column 'cat_col'
 ggplot(out_auc, aes(x = positive.marker, y = AUC, color = positive.marker)) +
@@ -608,7 +686,6 @@ ggplot(out_auc, aes(x = negative.marker, y = AUC, color = negative.marker)) +
 ```
 
 ```{r, fig.height=5, fig.width=8}
-library(ggplot2)
 
 # Assuming your dataframe is named 'df' with numerical column 'num_col' and categorical column 'cat_col'
 ggplot(out_auc, aes(x = ds, y = AUC, color = ds)) +
@@ -623,19 +700,16 @@ a <- head(out_auc[order(out_auc$AUC, decreasing = TRUE), ], 20)
   
 ```
 
-AUC scores for positive vs negative markers: 
 
-```{r, fig.height=5, fig.width=8}
-library(viridis)
-ggplot(out_auc, aes(positive.marker, negative.marker, fill = AUC)) + 
-  geom_tile() + scale_fill_viridis() + xlab("Positive markers") + ylab("Negative markers")
-```
 
-AUC vs PICS (using KS components) 
+### AUC vs PICS (using KS components) 
+
+**Rational**: a better correlation between AUC and PICS might imply that PICS is a good replacement for what AUC measures: a good separation between positive and negative peaks. However, while AUC needs the information about isotype, PICS does not. 
+
 
 ```{r, fig.height=5, fig.width=12}
 
-ggplot(out_auc, aes(x=AUC, y=PICS.ks, col = normalization)) + 
+ggplot(out_auc, aes(x=AUC, y=PICS.ks.glob, col = normalization)) + 
 geom_point() + geom_smooth(se = FALSE) + ggtitle("AUC vs PICS score") + 
   xlab("AUC") + ylab("PICS global (ks)") +
 ggplot(out_auc, aes(x=AUC, y=PICS.ks.pos, col = normalization)) + 
@@ -644,9 +718,140 @@ geom_point() + geom_smooth(se = FALSE) +
 ggplot(out_auc, aes(x=AUC, y=PICS.ks.neg, col = normalization)) + 
 geom_point() + geom_smooth(se = FALSE) + 
   xlab("AUC") + ylab("PICS negative (ks)")
+
 ```
 
+
+
 ==> See in which case PICS > AUC and the opposite ? Integrate this into parameters..? 
+
+```{r}
+melt_auc <- out_auc[,c("AUC", grep("PICS", colnames(out_auc), value = T), "normalization")]
+melt_auc = melt(melt_auc, id.vars = c("AUC", "normalization"),
+                measure.vars = c(grep("PICS", colnames(melt_auc), value = T)), 
+                value.name = "PICS.score")
+# Define a regular expression pattern to match "X.Y.Z" format
+pattern <- "^[^.]+\\.([^\\.]+)\\.[^.]+$"
+# Use gsub with the pattern to extract the middle part ("Y")
+melt_auc$negative_score <- gsub(pattern, "\\1", melt_auc$variable)
+pattern <- "^[^.]+\\.[^.]+\\.([^\\.]+)$"
+# Use gsub with the pattern to extract the last part ("Z")
+melt_auc$score_component <-  gsub(pattern, "\\1", melt_auc$variable)
+
+ggplot(melt_auc, aes(AUC, PICS.score, colour = factor(normalization))) + geom_point() + 
+  facet_grid(rows = vars(score_component), cols = vars(negative_score),  
+             scales = "free_y")+ labs(color='Normalization') 
+```
+
+```{r}
+# Calculate correlation between X and Y for all combinations of A and B
+corr_auc.pics <- melt_auc %>%
+  group_by(negative_score, normalization) %>%
+  summarise(correlation = cor(AUC, PICS.score, method = "spearman"), .groups = "drop")
+
+avg_values <- corr_auc.pics %>%
+  group_by(negative_score) %>%
+  summarise(avg_B = mean(correlation))
+
+# Reorder levels of A based on average values of B
+corr_auc.pics$negative_score <- factor(corr_auc.pics$negative_score, 
+                                       levels = avg_values$negative_score[order(avg_values$avg_B)])
+
+ggplot(corr_auc.pics, aes(negative_score, correlation, colour = factor(normalization)) ) + 
+  geom_point(size = 3) + xlab("negative score\nstrategy") + labs(color='Normalization') 
+
+```
+
+
+
+```{r}
+# Calculate correlation between X and Y for all combinations of A and B
+corr_auc.pics <- melt_auc %>%
+  group_by(negative_score, score_component) %>%
+  summarise(correlation = cor(AUC, PICS.score, method = "spearman"), .groups = "drop") 
+
+avg_values <- corr_auc.pics %>%
+  group_by(negative_score) %>%
+  summarise(avg_B = mean(correlation))
+
+# Reorder levels of A based on average values of B
+corr_auc.pics$negative_score <- factor(corr_auc.pics$negative_score, 
+                                       levels = avg_values$negative_score[order(avg_values$avg_B)])
+
+ggplot(corr_auc.pics, aes(negative_score, correlation, colour = factor(score_component)) ) + 
+  geom_point(size = 3) + xlab("negative score\nstrategy") + labs(color='PICS score\ncomponent') 
+
+```
+
+
+## AUC vs Isotypes / negatives 
+
+AUC scores for positive vs negative markers: 
+
+```{r, fig.height=5, fig.width=8}
+
+library(viridis)
+ggplot(out_auc, aes(positive.marker, negative.marker, fill = AUC)) + 
+  geom_tile() + scale_fill_viridis() + xlab("Positive markers") + ylab("Negative markers")
+
+```
+
+
+```{r, fig.height=5, fig.width=10}
+
+ggplot(out_auc[out_auc$ds == "hao_2020", ], aes(positive.marker, negative.marker, fill = AUC)) + 
+  geom_tile() + scale_fill_viridis() + xlab("Positive markers") + ylab("Negative markers") +
+  ggtitle("Hao dataset") + 
+ggplot(out_auc[out_auc$ds == "kotliarov_2020", ], aes(positive.marker, negative.marker, fill = AUC)) + 
+  geom_tile() + scale_fill_viridis() + xlab("Positive markers") + ylab("Negative markers") +
+  ggtitle("Kotliarov dataset")
+
+```
+
+
+
+
+```{r}
+print("isotypes:")
+(neg <- lapply(dat, function(x){
+  rownames(rowData(x)[rowData(x)$is.isotype == TRUE, ])
+}))
+
+
+print("positive controls:")
+(pos <- lapply(dat, function(x){
+  rownames(rowData(x)[rowData(x)$is.posControl == TRUE, ])
+}))
+```
+
+Not all isotypes/ positive controls can be retrieves in the metadata ... 
+
+For instance, no isotypes could be retrieved among the Hao metadata
+
+```{r}
+
+abs_metadata$target[abs_metadata$target == "Mouse IgG1, κ isotype Ctrl"] <- "MouseIgG1kappaisotype" 
+abs_metadata$target[abs_metadata$target == "Mouse IgG2a, κ isotype Ctrl"] <- "MouseIgG2akappaisotype"
+abs_metadata$target[abs_metadata$target == "Mouse IgG2b, κ Isotype Ctrl"] <- "Mouse IgG2bkIsotype"
+abs_metadata$target[abs_metadata$target == "Rat IgG2b, κ Isotype Ctrl"] <- "Rat-IgG2b"
+abs_metadata$target[abs_metadata$target == "IgG1"] <- "MouseIgG1kappaisotype"
+abs_metadata$target[abs_metadata$target == "IgG1"] <- "MouseIgG2akappaisotype"
+
+
+abs_sub <- abs_metadata[abs_metadata$target %in% c(out_auc$positive.marker, out_auc$negative.marker), ]
+abs_sub[order(abs_sub$target), ]
+
+```
+
+
+```{r}
+abs_hao
+```
+
+
+
+
+
 
 ### Spot checks 
 
