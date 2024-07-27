@@ -1,5 +1,5 @@
 ---
-title: "PICS score rationale"
+title: "PICS score on Hao and Kotliarov datasets"
 author: "Anthony Sonrel"
 date: "`r Sys.Date()`"
 output: 
@@ -15,6 +15,10 @@ output:
 knitr::opts_chunk$set(echo = TRUE)
 options(bitmapType="cairo") 
 ```
+
+
+This markdown summarizes the initial thought in the development of the PICS score: 
+use t-test, sd, median, etc. and we found out it would be more suited to use the KS test for both negative and positive component. 
 
 ## Load necessary libraries
 
@@ -55,7 +59,7 @@ knitr::include_graphics("img/pics_schema2.png")
 ```{r}
 ## UTILS
 
-do_pics_comb_plot <- function(dat, ks_pos = TRUE, neg_fun = "KS", digits = 0){
+do_pics_comb_plot <- function(dat, ks_pos = FALSE, neg_fun = "med_sd", digits = 0){
   # for each dataset
   # iterate over isotype and positive markers
   # calculate the pics score and
@@ -88,7 +92,7 @@ do_pics_comb_plot <- function(dat, ks_pos = TRUE, neg_fun = "KS", digits = 0){
           ggplot(df, aes(x=value)) + 
             geom_histogram(fill = "#990000", alpha = 0.9)  + ylab(xnam) + xlab("")
         })
-        out_ks[[paste(INDEX,i, j, k, sep = ",")]] <- wrap_plots(pos_pl, ncol = 1) -
+        out_ks[[paste(INDEX,i, j, k, sep = ",")]] <- wrap_plots(pos_pl, ncol = 1)  -
           wrap_plots(neg_pl, ncol = 1)
   
       }
@@ -97,6 +101,7 @@ do_pics_comb_plot <- function(dat, ks_pos = TRUE, neg_fun = "KS", digits = 0){
 
   return(out_ks)
 }
+
 ```
 
 ## Load data
@@ -119,7 +124,7 @@ dat
 
 ```{r}
 # keeping only hao & kotliarov, whcih have isotypes
-dat <- dat[c(grep("antunes|hao|kotliarov", names(dat)))]
+dat <- dat[c(grep("hao|kotliarov", names(dat)))]
 
 ```
 
@@ -174,9 +179,6 @@ Antibody metadata
 ```{r, warning=FALSE, message=FALSE}
 abs_kot <- read_csv("../data/kotliarov_2020/abs_metadata.csv")
 abs_hao <- read_csv("../data/hao_2020/abs_metadata.csv")
-abs_antunes_hdc <- read_csv("../data/antunes_2021_human_DC/abs_metadata.csv")
-abs_antunes_htam <- read_csv("../data/antunes_2021_human_TAM/abs_metadata.csv")
-abs_antunes_mtam <- read_csv("../data/antunes_2021_mouse_TAM/abs_metadata.csv")
 
 
 abs_kot <- data.frame("antibody.clone" = abs_kot$Clone, 
@@ -185,17 +187,9 @@ abs_kot <- data.frame("antibody.clone" = abs_kot$Clone,
 abs_hao <- data.frame("antibody.clone" = abs_hao$`Antibody Clone`, 
                       "target" = abs_hao$Target, 
                       "dataset" = "Hao")
-abs_antunes_hdc <- data.frame("antibody.clone" = abs_antunes_hdc$Clone, 
-                      "target" = abs_antunes_hdc$Name, 
-                      "dataset" = "Antunes_human_DC")
-abs_antunes_htam <- data.frame("antibody.clone" = abs_antunes_htam$Clone, 
-                      "target" = abs_antunes_htam$Name, 
-                      "dataset" = "Antunes_human_TAM")
-abs_antunes_mtam <- data.frame("antibody.clone" = abs_antunes_mtam$Clone, 
-                      "target" = abs_antunes_mtam$Name, 
-                      "dataset" = "Antunes_mouse_TAM")
 
-abs_metadata <- rbind(abs_kot, abs_hao, abs_antunes_hdc, abs_antunes_htam, abs_antunes_mtam)
+
+abs_metadata <- rbind(abs_kot, abs_hao)
 head(abs_metadata)
 ```
 
@@ -243,11 +237,77 @@ dat
 
 PICS score calculation on different combinations of positive/ negative markers: 
 
+###  Original PICS score  {.tabset}
+
+The original idea was to use t-test (positive component) and median*sd (negative component)
+
+```{r warning=FALSE, message=FALSE}
+out <- do_pics_comb_plot(dat, ks_pos = FALSE, neg_fun="med_sd", digits = 0)
+```
+
+
+Some good examples, where higher score indicates a better segregation
+
+- **"2,hao_2020,Rat-IgG1-1,CD45RA" "3,hao_2020,Rat-IgG1-1,CD45RO" "4,hao_2020,Rat-IgG1-1,CD45-2"**
+
+Some bad examples, where higher score not necessarly indicates a better segregation: 
+
+- **"5,hao_2020,Rat-IgG1-1,CD45-1" "10,hao_2020,Rat-IgG2b,CD45-1" **
+
+```{r, results='asis', echo = FALSE,warning=FALSE, message=FALSE,eval=!interactive()}
+for (i in 1:length(out)) {
+  cat("#### ",names(out)[i],"\n")
+  print(out[[i]])
+  cat('\n\n')
+}
+```
+
+
+**POSSIBLE SOLUTION:** we could standardize the positive component of PICS score (t-stat). The *PICS negative* is bound to 0 - 10 but the *PICS positive* component (t-stat) can take higher values and have more important weights. 
+
+
+
+### KS test stat for positive component: {.tabset}
+
+--> **Replace the tstat with a ks_pos stat from the PICS positive component. **
+
+IDEA: 
+
+Instead of using a t-statistic testing the difference between the positive and negative control, let's use the D statistics from the KS test (testing if two samples are drawn from the same distribution). 
+
+As a reminder, some examples seemed to be drawn by the positive component, and less influenced by the negative component (testing how the isotype fits 0). Below is a problematic example: the positive signal is closer to 0 but has a higher PICS score. 
+
+```{r}
+out[[5]]
+```
+
+
+```{r warning=FALSE, message=FALSE}
+out <- do_pics_comb_plot(dat, ks_pos = TRUE, digits = 2)
+```
+
+
+```{r, results='asis', echo = FALSE,warning=FALSE, message=FALSE,eval=!interactive()}
+for (i in 1:length(out)) {
+  cat("#### ",names(out)[i],"\n")
+  print(out[[i]])
+  cat('\n\n')
+}
+```
+
+
+
 
 ### KS test for positive and negative components {.tabset}
 
 
-We have here both the positive and the negative component with KS test
+Replace also the negative component 
+
+1 / sd(X) * mean(X) + 0.1 
+
+By 
+
+1 / KSstat(X, 0)
 
 
 ```{r warning=FALSE, message=FALSE}
