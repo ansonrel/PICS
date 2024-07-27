@@ -48,9 +48,9 @@ save_sce <- function(x, output_sce, clustmethod) {
 # functions used to calculate the normalization score based on negative and 
 # positive control signals
 # neg_fun can only be of 
+# - med_sd : median weighted by sd <--- DEFAULT 
 # - KS : KS test alone
 # - KS_sd: KS test weighted by sd
-# - med_sd : median weighted by sd <--- default 
 
 get_negScore <- function(d, neg_fun = FALSE) {
   
@@ -69,7 +69,15 @@ get_negScore <- function(d, neg_fun = FALSE) {
   
   
   if(neg_fun == "KS"){
-    return( 1/(ks.test(d, y = "pnorm", 0, alternative = "two.sided")$statistic + .1))
+    
+    
+    val <-  1/(ks.test(d, y = "pnorm", 0, alternative = "two.sided")$statistic + .1)
+    # Normalize the score value to [0, 1]
+    X_min <- 1/1.1
+    X_max <- 1/0.1
+    
+    return((val - X_min) / (X_max - X_min))
+    
   } else if (neg_fun == "KS_sd"){
     return( 1/(ks.test(d, y = "pnorm", 0, alternative = "two.sided")$statistic * sd(d) + .1))
   } else if (neg_fun == "med_sd"){
@@ -169,11 +177,10 @@ get_normScore <- function(d_neg, d_pos, ks_pos = FALSE, positive_only = FALSE,
   } else if (negative_only){
     out <- negScore
   } else {
-    out <- negScore * posScore
+    # Root Mean Square
+    out <- sqrt((negScore^2 + posScore^2) / 2)
   }
   
-  #TODO: return the score of every combination of isotypes and positive controls
-  # instead of aggregating them using mean()
   return(out)
 }
 
@@ -217,7 +224,36 @@ saveControlScore <- function(x, ks_pos = FALSE, neg_fun = "med_sd") {
   return(score)
 }
 
-picsScore <- function(x, assaynam = NULL, ks_pos = FALSE, neg_fun = "med_sd",
+
+
+
+
+
+
+
+#' PICS score metric
+#' 
+#' Compute a negative component based on isotype information and a positive 
+#' component based on positive component expression and average it across all 
+#' combination of markers. 
+#' 
+#' @param x A `SingleCellExperiment` oject with bolean `rowData(x)$is.isotype`
+#'  and `rowData(x)$is.posControl`.
+#' @param assaynam If the main assay of `x` is not the protein expression, the
+#' name of the assay containing it. 
+#' @param ks_pos  Whether to use the KS test for the positive component of the 
+#' score or not. If set to `FALSE`, will use a two-sided T-test instead. 
+#' @param neg_fun Function used for the negative component. Can be 'KS' (default, 
+#' KS test against 0), 'KS_sd' (KS test weighted by standard deviation) or 
+#' 'med_sd' (median weighted by standard deviation). 
+#' @param positive_only Whether to return the positive component only, mainly 
+#' for traceback/ debugging purpose. 
+#' @param negative_only Whether to return the negative component only, mainly
+#' for traceback/ debugging purpose. 
+#' 
+#' @return The PICS score, averaged across all combinations of positive/ negative
+#' markers.
+picsScore <- function(x, assaynam = NULL, ks_pos = TRUE, neg_fun = "KS",
                       positive_only = FALSE, negative_only = FALSE) {
   
   if(is.null(assaynam)){
