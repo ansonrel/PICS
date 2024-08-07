@@ -60,18 +60,21 @@ get_negScore <- function(d, neg_fun = FALSE) {
     stop(paste0("`neg_fun` should be of: ", paste(accept_arg, collapse = ",")))
   }
   
-  # Shift values toward zero
-  d <- d - min(d)
-  # Scale so that distribution is between 0 and 1
-  if (!max(d) == 0){
-    d <- d/max(d)
-  }
+  # # Shift values toward zero
+  # d <- d - min(d)
+  # # Scale so that distribution is between 0 and 1
+  # if (!max(d) == 0){
+  #   d <- d/max(d)
+  # }
   
   
   if(neg_fun == "KS"){
-    return( 1/(ks.test(d, y = "pnorm", 0, alternative = "two.sided")$statistic + .1))
+    val <- 1/(ks.test(d, y =  0, alternative = "two.sided")$statistic + .1)
+    # Normalize the score value to [0, 1]
+    return((val -  1/1.1) / ( 1/0.1 -  1/1.1 ))
+    
   } else if (neg_fun == "KS_sd"){
-    return( 1/(ks.test(d, y = "pnorm", 0, alternative = "two.sided")$statistic * sd(d) + .1))
+    return( 1/(ks.test(d, y =  0, alternative = "two.sided")$statistic * sd(d) + .1))
   } else if (neg_fun == "med_sd"){
     # Returns 10 if median or sd is 0
     return( 1/(abs(median(d)) * sd(d) + .1) )
@@ -84,13 +87,13 @@ get_posScore <- function(d_neg, d_pos, ks_pos = FALSE) {
   d_neg <- d_neg - min(d_neg)
   d_pos <- d_pos - min(d_pos)
   
-  # Scale so that both distributions are between 0 and 1
-  if (!max(d_neg) == 0){
-    d_neg <- d_neg/max(d_neg)
-  }
-  if (!max(d_pos) == 0){
-    d_pos <- d_pos/max(d_pos)
-  }
+  # # Scale so that both distributions are between 0 and 1
+  # if (!max(d_neg) == 0){
+  #   d_neg <- d_neg/max(d_neg)
+  # }
+  # if (!max(d_pos) == 0){
+  #   d_pos <- d_pos/max(d_pos)
+  # }
   
   # Compare
   sd_neg <- sd(d_neg)
@@ -169,10 +172,10 @@ get_normScore <- function(d_neg, d_pos, ks_pos = FALSE, positive_only = FALSE,
   } else if (negative_only){
     out <- negScore
   } else {
-    out <- negScore * posScore
+    # Root Mean Square
+    out <- sqrt((negScore^2 + posScore^2) / 2)
   }
   
-  #TODO: return the score of every combination of isotypes and positive controls
   # instead of aggregating them using mean()
   return(out)
 }
@@ -217,7 +220,31 @@ saveControlScore <- function(x, ks_pos = FALSE, neg_fun = "med_sd") {
   return(score)
 }
 
-picsScore <- function(x, assaynam = NULL, ks_pos = FALSE, neg_fun = "med_sd",
+
+
+#' PICS score metric
+#' 
+#' Compute a negative component based on isotype information and a positive 
+#' component based on positive component expression and average it across all 
+#' combination of markers. 
+#' 
+#' @param x A `SingleCellExperiment` oject with bolean `rowData(x)$is.isotype`
+#'  and `rowData(x)$is.posControl`.
+#' @param assaynam If the main assay of `x` is not the protein expression, the
+#' name of the assay containing it. 
+#' @param ks_pos  Whether to use the KS test for the positive component of the 
+#' score or not. If set to `FALSE`, will use a two-sided T-test instead. 
+#' @param neg_fun Function used for the negative component. Can be 'KS' (default, 
+#' KS test against 0), 'KS_sd' (KS test weighted by standard deviation) or 
+#' 'med_sd' (median weighted by standard deviation). 
+#' @param positive_only Whether to return the positive component only, mainly 
+#' for traceback/ debugging purpose. 
+#' @param negative_only Whether to return the negative component only, mainly
+#' for traceback/ debugging purpose. 
+#' 
+#' @return The PICS score, averaged across all combinations of positive/ negative
+#' markers.
+picsScore <- function(x, assaynam = NULL, ks_pos = TRUE, neg_fun = "KS",
                       positive_only = FALSE, negative_only = FALSE) {
   
   if(is.null(assaynam)){
